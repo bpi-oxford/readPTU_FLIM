@@ -610,7 +610,7 @@ def PTU_ScanRead(filename, plt_flag=False):
                 markers = np.delete(markers, ind)
 
                 tend = y[-1] + loc
-# TODO: Modify beyond this line
+
                 if len(Turns2) > 1:
                     for j in range(len(Turns2) - 1):
                         t1 = Turns1[0]
