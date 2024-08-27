@@ -5,12 +5,14 @@ Created on Fri Aug 23 16:46:33 2024
 @author: narai
 """
 import struct
-import datetime
+# import datetime
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.io import savemat
-from tqdm import tqdm
+# from tqdm import tqdm
 import time
+import pickle
+
+#%%
 
 class PTUreader():
     
@@ -413,6 +415,116 @@ class PTUreader():
        """Get a chunk of photon data from start_idx to end_idx."""
        return self._ptu_read_raw_data(start_idx, end_idx)
     
+def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head):
+    Resolution = max(head['MeasDesc_Resolution'] * 1e9, 0.256)  # resolution of 1 ns to calculate average lifetimes
+    chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
+    SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
+    nx = head['ImgHdr_PixX']
+    ny = head['ImgHdr_PixY']
+    dind = np.unique(im_chan).astype(np.float64)
+    Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * (head['MeasDesc_Resolution'] / Resolution) * 1e9)
+    maxch_n = len(dind)
+
+    tcspc_pix = np.zeros((nx, ny, Ngate, maxch_n))
+    timeF = [None] * maxch_n
+    tag = np.zeros((nx, ny, maxch_n))
+    tau = np.zeros_like(tag)
+
+    binT = np.transpose(np.tile(np.arange(range(Ngate)).reshape(-1, 1, 1) * Resolution, (1, nx, ny)), (1, 2, 0))  # 3D time axis
+    
+    for ch in range(maxch_n):
+        ind = im_chan == dind[ch]
+        tcspc_pix[:, :, :, ch] = mHist3(im_line[ind].astype(np.float64), 
+                                        im_col[ind].astype(np.float64), 
+                                        (im_tcspc[ind] / chDiv).astype(np.float64), 
+                                        np.arange(nx), 
+                                        np.arange(ny), 
+                                        np.arange(Ngate))  # tcspc histograms for all the pixels at once!
+        timeF[ch] = np.round(im_sync[ind] / SyncRate / Resolution / 1e-9) + im_tcspc[ind].astype(np.float64)  # in tcspc bins
+        tag[:, :, ch] = np.sum(tcspc_pix[:, :, :, ch], axis=2)
+        tau[:, :, ch] = np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch], axis=2) / tag[:, :, ch]) -
+                                (np.sum(binT * tcspc_pix[:, :, :, ch], axis=2) / tag[:, :, ch]) ** 2))
+        
+    return tag, tau, tcspc_pix, timeF
+
+
+def mHist3(x, y, z, xv=None, yv=None, zv=None):
+    x = np.asarray(x).flatten()
+    y = np.asarray(y).flatten()
+    z = np.asarray(z).flatten()
+
+    ind = ~np.isfinite(x) | ~np.isfinite(y) | ~np.isfinite(z)
+    x = x[~ind]
+    y = y[~ind]
+    z = z[~ind]
+
+    if xv is None and yv is None and zv is None:
+        nx, ny, nz = 100, 100, 100
+    elif isinstance(xv, (list, np.ndarray)) and len(xv) == 1:
+        nx, ny, nz = xv[0], xv[0], zv[0]
+    else:
+        nx, ny, nz = xv[0], yv[0], zv[0]
+
+    if xv is None or yv is None or zv is None:
+        xmin, xmax = np.min(x), np.max(x)
+        ymin, ymax = np.min(y), np.max(y)
+        zmin, zmax = np.min(z), np.max(z)
+        dx, dy, dz = (xmax - xmin) / nx, (ymax - ymin) / ny, (zmax - zmin) / nz
+
+        xv = np.arange(xmin, xmax + dx, dx)
+        yv = np.arange(ymin, ymax + dy, dy)
+        zv = np.arange(zmin, zmax + dz, dz)
+
+        x = np.round((x - xmin) / dx).astype(int) + 1
+        y = np.round((y - ymin) / dy).astype(int) + 1
+        z = np.round((z - zmin) / dz).astype(int) + 1
+        xmax = np.round((xmax - xmin) / dx).astype(int) + 1
+        ymax = np.round((ymax - ymin) / dy).astype(int) + 1
+    else:
+        xmin, xmax = xv[0], xv[-1]
+        ymin, ymax = yv[0], yv[-1]
+        zmin, zmax = zv[0], zv[-1]
+
+        x = np.clip(x, xmin, xmax)
+        y = np.clip(y, ymin, ymax)
+        z = np.clip(z, zmin, zmax)
+
+        if np.all(np.diff(np.diff(xv)) == 0):
+            dx = xv[1] - xv[0]
+            x = np.round((x - xmin) / dx).astype(int) + 1
+            xmax = np.round((xmax - xmin) / dx).astype(int) + 1
+        else:
+            x = np.round(np.interp(x, xv, np.arange(len(xv)))).astype(int)
+
+        if np.all(np.diff(np.diff(yv)) == 0):
+            dy = yv[1] - yv[0]
+            y = np.round((y - ymin) / dy).astype(int) + 1
+            ymax = np.round((ymax - ymin) / dy).astype(int) + 1
+        else:
+            y = np.round(np.interp(y, yv, np.arange(len(yv)))).astype(int)
+
+        if np.all(np.diff(np.diff(zv)) == 0):
+            dz = zv[1] - zv[0]
+            z = np.round((z - zmin) / dz).astype(int) + 1
+        else:
+            y = np.round(np.interp(y, yv, np.arange(len(yv)))).astype(int)
+
+    h = np.zeros(len(xv) * len(yv) * len(zv), dtype=int)
+    num = np.sort(x + xmax * y + xmax * ymax * z )
+    h[num] = 1
+
+    tmp = np.diff(np.concatenate(([0], num+1, [0])) == 0)
+    ind = np.arange(len(num)).astype(int) + 1
+    h[num[tmp == 1]] -= ind[tmp == 1] - ind[tmp == -1]
+
+    h = h.reshape((len(xv), len(yv), len(zv)))
+
+    return h, xv, yv, zv
+
+
+
+
+
     
 def PTU_ScanRead(filename, plt_flag=False):
     photons = int(1e7) # number of photons to read at a time. Can be adjusted based on the system memory
@@ -426,15 +538,11 @@ def PTU_ScanRead(filename, plt_flag=False):
 
     nx = head['ImgHdr_PixX']
     ny = head['ImgHdr_PixY']
-    
-  
-   
 
-    num_records = ptu_reader.num_records
     if head['ImgHdr_Ident'] in [1, 6]:  # Scan Cases 1 and 6
-        anzch = 32  # max number of channels (can be 64 now for the new MultiHarp)
-        
+      
         # Common settings
+        anzch = 32  # max number of channels (can be 64 now for the new MultiHarp)
         Resolution = max([1e9 * head['MeasDesc_Resolution'], 0.064])
         chDiv = 1e-9 * Resolution / head['MeasDesc_Resolution']
         Ngate = int(np.ceil(1e9 * head['MeasDesc_GlobalResolution'] / Resolution)) + 1
@@ -453,7 +561,7 @@ def PTU_ScanRead(filename, plt_flag=False):
         tmpx = []
         chan = []
         markers = []
-        dt = np.zeros((ny,1))
+        dt = np.zeros(ny)
         
         im_sync = []
         im_tcspc = []
@@ -469,7 +577,7 @@ def PTU_ScanRead(filename, plt_flag=False):
         line = 0 # python compatible
       
         if head['ImgHdr_BiDirect'] == 0:  # Unidirectional scan
-            tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk([cnt+1, photons])
+            tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons)
             while num>0:
               
                 cnt += num
@@ -479,8 +587,8 @@ def PTU_ScanRead(filename, plt_flag=False):
                 ind = (tmp_special>0) or ((tmp_chan<anzch) and(tmp_tcspc<Ngate*chDiv));
                 
                 y = np.concatenate((y, tmp_sync[ind]))  # Appending selected elements to y
-                tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc[ind] / chDiv) + 1))  # Appending selected elements to tmpx
-                chan = np.concatenate((chan, tmp_chan[ind] + 1))  # Appending selected elements to chan
+                tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc[ind] / chDiv) ))  # Appending selected elements to tmpx
+                chan = np.concatenate((chan, tmp_chan[ind] ))  # Appending selected elements to chan
                 markers = np.concatenate((markers, tmp_special[ind]))  # Appending selected elements to markers
 
                 if LineStart == LineStop:
@@ -498,7 +606,7 @@ def PTU_ScanRead(filename, plt_flag=False):
                 ind = (markers != 0)
                 y = np.delete(y, ind)
                 tmpx = np.delete(tmpx, ind)
-                tmp_chan = np.delete(tmp_chan, ind)
+                chan = np.delete(chan, ind)
                 markers = np.delete(markers, ind)
 
                 tend = y[-1] + loc
@@ -511,22 +619,22 @@ def PTU_ScanRead(filename, plt_flag=False):
                         ind = (y < t1)
                         y = np.delete(y, ind)
                         tmpx = np.delete(tmpx, ind)
-                        tmp_chan = np.delete(tmp_chan, ind)
+                        chan = np.delete(chan, ind)
 
                         ind = (y >= t1) and (y <= t2)
 
                         im_sync.extend(y[ind])
                         im_tcspc.extend(tmpx[ind].astype(np.uint16))
-                        im_chan.extend(tmp_chan[ind].astype(np.uint8))
+                        im_chan.extend(chan[ind].astype(np.uint8))
                         im_line.extend([line].astype(np.uint16) * np.sum(ind))
                         im_col.extend(np.floor(nx * (y[ind] - t1) / (t2 - t1))) # Python compatible, pixel starts from zero
 
-                        dt = t2 - t1
+                        dt[line] = t2 - t1
                         line += 1
 
                         Turns1 = Turns1[1:]
                         Turns2 = Turns2[1:]
-                tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk([cnt+1, photons])
+                tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons)
             
             
             t1 = Turns1[-1]
@@ -535,34 +643,35 @@ def PTU_ScanRead(filename, plt_flag=False):
             ind          = (y<t1);
             y = np.delete(y, ind)
             tmpx = np.delete(tmpx, ind)
-            tmp_chan = np.delete(tmp_chan, ind)
+            chan = np.delete(chan, ind)
 
             ind = (y>=t1) and (y<=t2);
 
-            im_sync   = [im_sync; y(ind)];
-            im_tcspc  = [im_tcspc; uint16(tmpx(ind))];
-            im_chan   = [im_chan; uint8(chan(ind))];
-            im_line   = [im_line; uint16(line.*ones(sum(ind),1))];
-            im_col    = [im_col;  uint16(1 + floor(nx.*(y(ind)-t1)./(t2-t1)))];
-            dt(line)  = t2-t1;
+            im_sync.extend(y[ind])
+            im_tcspc.extend(tmpx[ind].astype(np.uint16))
+            im_chan.extend(chan[ind].astype(np.uint8))
+            im_line.extend([line].astype(np.uint16) * np.sum(ind))
+            im_col.extend(np.floor(nx * (y[ind] - t1) / (t2 - t1))) # Python compatible, pixel starts from zero
+            dt[line]  = t2-t1;
 
-                line = line +1;    
+            line = line +1;    
             head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
             head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']
 
         else:  # Bidirectional scan
-            while cnt < num_records:
-                end_idx = min(cnt + photons, num_records)
-                tmp_sync, tmp_tcspc, tmp_chan, tmp_special = ptu_reader.get_photon_chunk(cnt, end_idx)
+            tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons)
+            while num>0:
+                cnt += num
+                if len(y)>0:
+                    tmp_sync = tmp_sync + tend
+                
+                ind = (tmp_special>0) or ((tmp_chan<anzch) and(tmp_tcspc<Ngate*chDiv));
+                
+                y = np.concatenate((y, tmp_sync[ind]))  # Appending selected elements to y
+                tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc[ind] / chDiv) ))  # Appending selected elements to tmpx
+                chan = np.concatenate((chan, tmp_chan[ind] ))  # Appending selected elements to chan
+                markers = np.concatenate((markers, tmp_special[ind]))  # Appending selected elements to markers
 
-                cnt += len(tmp_sync)
-                ind = (tmp_chan < anzch) & (tmp_tcspc <= Ngate * chDiv)
-
-                y = tmp_sync[ind] + tend
-                tmpx = np.floor(tmp_tcspc[ind] / chDiv).astype(int) + 1
-                tmp_chan = tmp_chan[ind] + 1
-
-                markers = tmp_special[ind]
                 if LineStart == LineStop:
                     tmpturns = y[markers == LineStart]
                     if len(Turns1) > len(Turns2):
@@ -578,10 +687,10 @@ def PTU_ScanRead(filename, plt_flag=False):
                 ind = (markers != 0)
                 y = np.delete(y, ind)
                 tmpx = np.delete(tmpx, ind)
-                tmp_chan = np.delete(tmp_chan, ind)
+                chan = np.delete(chan, ind)
                 markers = np.delete(markers, ind)
 
-                tend = y[-1]
+                tend = y[-1] + loc
 
                 if len(Turns2) > 2:
                     for j in range(0, 2 * (len(Turns2) // 2) - 1, 2):
@@ -591,18 +700,18 @@ def PTU_ScanRead(filename, plt_flag=False):
                         ind = (y < t1)
                         y = np.delete(y, ind)
                         tmpx = np.delete(tmpx, ind)
-                        tmp_chan = np.delete(tmp_chan, ind)
+                        chan = np.delete(chan, ind)
                         markers = np.delete(markers, ind)
 
                         ind = (y >= t1) & (y <= t2)
 
                         im_sync.extend(y[ind])
                         im_tcspc.extend(tmpx[ind])
-                        im_chan.extend(tmp_chan[ind])
+                        im_chan.extend(chan[ind])
                         im_line.extend([line] * np.sum(ind))
-                        im_col.extend(1 + np.floor(nx * (y[ind] - t1) / (t2 - t1)))
+                        im_col.extend(np.floor(nx * (y[ind] - t1) / (t2 - t1))) # 0 being the first pixel along x direction
 
-                        dt = t2 - t1
+                        dt[line] = t2 - t1
                         line += 1
 
                         t1 = Turns1[1]
@@ -611,166 +720,708 @@ def PTU_ScanRead(filename, plt_flag=False):
                         ind = (y < t1)
                         y = np.delete(y, ind)
                         tmpx = np.delete(tmpx, ind)
-                        tmp_chan = np.delete(tmp_chan, ind)
+                        chan = np.delete(chan, ind)
                         markers = np.delete(markers, ind)
 
                         ind = (y >= t1) & (y <= t2)
 
                         im_sync.extend(y[ind])
                         im_tcspc.extend(tmpx[ind])
-                        im_chan.extend(tmp_chan[ind])
+                        im_chan.extend(chan[ind])
                         im_line.extend([line] * np.sum(ind))
-                        im_col.extend(nx - np.floor(nx * (y[ind] - t1) / (t2 - t1)))
+                        im_col.extend(nx-1 - np.floor(nx * (y[ind] - t1) / (t2 - t1))) # nx-1 being the last pixel along x direction
 
-                        dt = t2 - t1
+                        dt[line] = t2 - t1
                         line += 1
 
                         Turns1 = Turns1[2:]
                         Turns2 = Turns2[2:]
+                tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons)
+            
+            if len(Turns2) >1:
+                t1 = Turns1[-2]
+                t2 = Turns2[-2]
+                
+                ind = (y < t1)
+                y = np.delete(y, ind)
+                tmpx = np.delete(tmpx, ind)
+                chan = np.delete(chan, ind)
+                markers = np.delete(markers, ind)
+
+                ind = (y >= t1) & (y <= t2)
+
+                im_sync.extend(y[ind])
+                im_tcspc.extend(tmpx[ind])
+                im_chan.extend(chan[ind])
+                im_line.extend([line] * np.sum(ind))
+                im_col.extend(np.floor(nx * (y[ind] - t1) / (t2 - t1))) # 0 being the first pixel along x direction
+
+                dt[line] = t2 - t1
+                line += 1
+
+                t1 = Turns1[-1]
+                t2 = Turns2[-1]
+
+                ind = (y < t1)
+                y = np.delete(y, ind)
+                tmpx = np.delete(tmpx, ind)
+                chan = np.delete(chan, ind)
+                markers = np.delete(markers, ind)
+
+                ind = (y >= t1) & (y <= t2)
+
+                im_sync.extend(y[ind])
+                im_tcspc.extend(tmpx[ind])
+                im_chan.extend(chan[ind])
+                im_line.extend([line] * np.sum(ind))
+                im_col.extend(nx-1 - np.floor(nx * (y[ind] - t1) / (t2 - t1))) # nx-1 being the last pixel along x direction
+
+                dt[line] = t2 - t1
+                line += 1
 
             head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
             head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']
 
-    elif head['ImgHdr_Ident'] == 3:  # Multi-frame case (Ident = 3)
+    elif head['ImgHdr_Ident'] == 3:  
+        # Common settings
+        anzch = 32  # max number of channels (can be 64 now for the new MultiHarp)
+        Resolution = max([1e9 * head['MeasDesc_Resolution'], 0.064])
+        chDiv = 1e-9 * Resolution / head['MeasDesc_Resolution']
+        Ngate = int(np.ceil(1e9 * head['MeasDesc_GlobalResolution'] / Resolution)) + 1
+        head['MeasDesc_Resolution'] = Resolution * 1e-9
+        
+        y = []
+        tmpx = []
+        chan = []
+        marker = []
+        
         dt = np.zeros(ny)
+        im_sync = []
+        im_tcspc = []
+        im_chan = []
+        im_line = []
+        im_col = []
+        im_frame = []
+        
+        cnt = 0
+        tend = 0
+        line = 0
+        n_frames = -1
         f_times = []
+        
+        head['ImgHdr_X0'] = 0
+        head['ImgHdr_Y0'] = 0
+        head['ImgHdr_PixResol'] = 1
+        
+        LineStart = 2 ** (head['ImgHdr_LineStart'] - 1)
+        LineStop = 2 ** (head['ImgHdr_LineStop'] - 1)
+        Frame = 2 ** (head['ImgHdr_Frame'] - 1)
+        
+        if Frame<1:
+            Frame = -1
+            in_frame = True
+            n_frames += 1
+            
+        tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons)    
+        
 
-        while cnt < num_records:
-            end_idx = min(cnt + photons, num_records)
-            tmp_sync, tmp_tcspc, tmp_chan, tmp_special = ptu_reader.get_photon_chunk(cnt, end_idx)
+        while num > 0:
 
-            cnt += len(tmp_sync)
+            t_sync = []
+            t_tcspc = []
+            t_chan = []
+            t_line = []
+            t_col = []
+            t_frame = []
+
+            cnt += num
             tmp_sync += tend
 
-            y = tmp_sync
-            tmpx = tmp_tcspc
-            markers = tmp_special
+            y.extend(tmp_sync)
+            tmpx.extend(tmp_tcspc)
+            chan.extend(tmp_chan)
+            marker.extend(tmp_special)
+            tend = y[-1] + loc
 
-            F = y[markers & (1 << (head['ImgHdr_Frame'] - 1)) > 0]
-            while F.size > 0:
-                if F.size > 0:  # Frame by Frame
-                    ind = y < F[0]
-                    f_y = y[ind]
-                    f_x = tmpx[ind]
-                    f_ch = tmp_chan[ind]
-                    f_m = markers[ind]
+            F = [val for val in y if val & Frame > 0]
+            while F:
 
-                    y = y[~ind]
-                    tmpx = tmpx[~ind]
-                    tmp_chan = tmp_chan[~ind]
-                    markers = markers[~ind]
+                if F:
+                    ind = [i for i, val in enumerate(y) if val < F[0]]
+                    f_y = [y[i] for i in ind]
+                    f_x = [tmpx[i] for i in ind]
+                    f_ch = [chan[i] for i in ind]
+                    f_m = [marker[i] for i in ind]
 
-                    L1 = f_y[f_m & (1 << (head['ImgHdr_LineStart'] - 1)) > 0]
-                    L2 = f_y[f_m & (1 << (head['ImgHdr_LineStop'] - 1)) > 0]
-                    if L1.size > 1:
-                        frame += 1
-                        for j in range(L2.size):
-                            ind = (f_y > L1[j]) & (f_y < L2[j])
+                    y = [y[i] for i in range(len(y)) if i not in ind]
+                    tmpx = [tmpx[i] for i in range(len(tmpx)) if i not in ind]
+                    chan = [chan[i] for i in range(len(chan)) if i not in ind]
+                    marker = [marker[i] for i in range(len(marker)) if i not in ind]
+                    
+                    L1 = [f_y[i] for i in range(len(f_y)) if f_m[i] & LineStart > 0]
+                    L2 = [f_y[i] for i in range(len(f_y)) if f_m[i] & LineStop > 0]
 
-                            im_sync.extend(f_y[ind])
-                            im_tcspc.extend(f_x[ind])
-                            im_chan.extend(f_ch[ind])
-                            im_line.extend([line] * np.sum(ind))
-                            im_col.extend(1 + np.floor(nx * (f_y[ind] - L1[j]) / (L2[j] - L1[j])))
-                            im_frame.extend([frame] * np.sum(ind))
+                    if y and y[0] == F[0] and marker[0] == 2:
+                        L2.append(y[0])
+                        del y[0]
+                        del tmpx[0]
+                        del chan[0]
+                        del marker[0]
+                    if y and y[0] == F[0] and marker[0] == 4:
+                        del y[0]
+                        del tmpx[0]
+                        del chan[0]
+                        del marker[0]
 
-                            dt[line - 1] += L2[j] - L1[j]
+                    f_times.append(F[0])
+                    F = F[1:]
+                    line = 0
+
+                    if len(L1) > 1:
+                        n_frames += 1
+                        for j in range(len(L2)):
+                            ind = [(f_y[k] > L1[j]) & (f_y[k] < L2[j]) for k in range(len(f_y))]
+                            t_sync.extend([f_y[k] for k in range(len(f_y)) if ind[k]])
+                            t_tcspc.extend([np.uint16(f_x[k]) for k in range(len(f_x)) if ind[k]])
+                            t_chan.extend([np.uint8(f_ch[k]) for k in range(len(f_ch)) if ind[k]])
+                            t_line.extend([np.uint16(line) for _ in range(sum(ind))])
+                            t_col.extend([np.uint16(np.floor(nx * (f_y[k] - L1[j]) / (L2[j] - L1[j]))) for k in range(len(f_y)) if ind[k]])
+                            t_frame.extend([np.uint16(n_frames) for _ in range(sum(ind))])
+                            dt[line] += (L2[j] - L1[j])
                             line += 1
 
-                        f_times.append(F[0])
-                        F = F[1:]
+                    im_sync.extend(t_sync)
+                    im_tcspc.extend(t_tcspc)
+                    im_chan.extend(t_chan)
+                    im_line.extend(t_line)
+                    im_col.extend(t_col)
+                    im_frame.extend(t_frame)
 
-            tend = y[-1]
+            tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons)   
+            
+        F = [val for val in y if val & Frame > 0]
 
+        t_sync = []
+        t_tcspc = []
+        t_chan = []
+        t_line = []
+        t_col = []
+        t_frame = []
+
+        if not in_frame:
+            if len(F)==0:
+                y = []
+                tmpx = []
+                chan = []
+                marker = []
+                line = 0
+            else:
+                ind = [i for i in range(len(y)) if y[i] <= F[0]]
+                y = [y[i] for i in range(len(y)) if i not in ind]
+                tmpx = [tmpx[i] for i in range(len(tmpx)) if i not in ind]
+                chan = [chan[i] for i in range(len(chan)) if i not in ind]
+                marker = [marker[i] for i in range(len(marker)) if i not in ind]
+                line = 0
+                n_frames += 1
+                f_times.append(F[0])
+
+        f_y = y
+        f_x = tmpx
+        f_ch = chan
+        f_m = marker
+        
+        y = []
+        tmpx = []
+        chan = []
+        
+        L1 = [f_y[i] for i in range(len(f_y)) if f_m[i] & LineStart > 0]
+        L2 = [f_y[i] for i in range(len(f_y)) if f_m[i] & LineStop > 0]
+
+        ll = line + len(L2) - 1
+        if ll > ny:
+            L1 = L1[:ny - line ]
+            L2 = L2[:ny - line ]
+
+        if len(L1) > 1:
+            for j in range(len(L2)):
+                ind = [(f_y[k] > L1[j]) & (f_y[k] < L2[j]) for k in range(len(f_y))]
+                t_sync.extend([f_y[k] for k in range(len(f_y)) if ind[k]])
+                t_tcspc.extend([np.uint16(f_x[k]) for k in range(len(f_x)) if ind[k]])
+                t_chan.extend([np.uint8(f_ch[k]) for k in range(len(f_ch)) if ind[k]])
+                t_line.extend([np.uint16(line) for _ in range(sum(ind))])
+                t_col.extend([np.uint16( np.floor(nx * (f_y[k] - L1[j]) / (L2[j] - L1[j]))) for k in range(len(f_y)) if ind[k]])
+                t_frame.extend([np.uint16(n_frames) for _ in range(sum(ind))])
+                dt[line] += (L2[j] - L1[j])
+                line += 1
+
+        im_sync.extend(t_sync)
+        im_tcspc.extend(t_tcspc)
+        im_chan.extend(t_chan)
+        im_line.extend(t_line)
+        im_col.extend(t_col)
+        im_frame.extend(t_frame)
+    
         head['ImgHdr_FrameTime'] = 1e9 * np.mean(np.diff(f_times)) / head['TTResult_SyncRate']
         head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
-        head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime'] / frame
+        head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime'] / n_frames
+        
+        dind = np.unique(im_chan)
+        tag = np.zeros((nx,ny,len(dind),np.max(im_frame)))
+        tau = np.copy(tag)
+        for frame in range(np.max(im_frame)):
+            [tmptag, tmptau] = Process_Frame(im_sync[im_frame == frame],im_col[im_frame == frame],\
+                                             im_line[im_frame == frame],im_chan[im_frame == frame],\
+                                                 im_tcspc[im_frame == frame],head)
+            if tmptag.size > 0:
+                tag[:,:,:,frame] = tmptag
+                tau[:,:,:,frame] = tmptau
+        
+        SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
+        maxch_n = len(dind)
+        
+        tcspc_pix = np.zeros((nx, ny, Ngate, maxch_n))
+        timeF = [None] * maxch_n  # Initialize a list to store time data for each channel
+        tags = np.zeros((nx, ny, maxch_n))
+        taus = np.zeros_like(tags)
+        binT = np.transpose(np.tile(np.arange(1, Ngate + 1).reshape(-1, 1, 1) * Resolution, (1, nx, ny)), (1, 2, 0))  # 3D time axis
+        
+        for ch in range(maxch_n):
+            ind = (im_chan == dind[ch] + 1)
+            tcspc_pix[:, :, :, ch] = mHist3(im_line[ind].astype(float), 
+                                            im_col[ind].astype(float), 
+                                            im_tcspc[ind].astype(float), 
+                                            np.arange(nx), 
+                                            np.arange(ny), 
+                                            np.arange(Ngate))
+            
+            timeF[ch] = np.round(im_sync[ind] / SyncRate / Resolution / 1e-9) + im_tcspc[ind].astype(float)
+            tags[:, :, ch] = np.sum(tcspc_pix[:, :, :, ch], axis=2)
+            taus[:, :, ch] = np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch], axis=2) / tags[:, :, ch]) -
+                                             (np.sum(binT * tcspc_pix[:, :, :, ch], axis=2) / tags[:, :, ch]) ** 2))
+            
+            
+        filename = f"{filename[:-4]}_FLIM_data.pkl"
 
-    elif head['ImgHdr_Ident'] == 9:  # Multi-frame case (Ident = 9)
+        # Create a dictionary to store all variables
+        data_to_save = {
+            'tag': tag,
+            'tau': tau,
+            'tags': tags,
+            'taus': taus,
+            'time': timeF,
+            'tcspc_pix': tcspc_pix,
+            'head': head,
+            'im_sync': im_sync,
+            'im_tcspc': im_tcspc,
+            'im_line': im_line,
+            'im_col': im_col,
+            'im_chan': im_chan,
+            'im_frame': im_frame
+            }
+        
+        # Save the data using pickle
+        with open(filename, 'wb') as f:
+            pickle.dump(data_to_save, f)  
+            
+            
+    elif head['ImgHdr_Ident'] == 9:          
         if 'ImgHdr_MaxFrames' in head:
-            nz = head['ImgHdr_MaxFrames']
+            nz = head(['ImgHdr_MaxFrames'])
         else:
-            time_per_frame = 1.0 / head['ImgHdr_LineFrequency'] * ny
-            total_time = head['TTResult_StopAfter'] * 1e-3
-            nz = int(np.ceil(total_time / time_per_frame))
+            tim_p_frame = 1/head['ImgHdr_LineFrequency']/ny
+            tot_time = head['TTResult_StopAfter']*10^-3
+            nz = np.ceil(tot_time/tim_p_frame)
+            
+        anzch = 32  # max number of channels (can be 64 now for the new MultiHarp)
+        Resolution = max([1e9 * head['MeasDesc_Resolution'], 0.064])
+        chDiv = 1e-9 * Resolution / head['MeasDesc_Resolution']
+        Ngate = int(np.ceil(1e9 * head['MeasDesc_GlobalResolution'] / Resolution)) + 1
+        head['MeasDesc_Resolution'] = Resolution * 1e-9
+        
+        _,_, tmpchan, tmpmarkers = ptu_reader.get_photon_chunk(1, photons)
+        dind = np.unique([val for i, val in enumerate(tmpchan) if not tmpmarkers[i]]) # the number of detectors
+        tag = np.zeros((nx, ny, len(dind), nz))
+        tau = np.copy(tag)
+        
+        y = []
+        tmpx = []
+        chan = []
+        marker = []
+        
+        dt = np.zeros(ny)
+        nphot = head['TTResult_NumberOfRecords']
+        im_sync = np.zeros(nphot)
+        im_tcspc = np.zeros(nphot,dtype=np.uint16)
+        im_chan = np.zeros(nphot,dtype=np.uint8)
+        im_line = np.copy(im_tcspc)
+        im_col = np.copy(im_tcspc)
+        im_frame = np.copy(im_tcspc)
+        
+        cnt = 0
+        tend = 0
+        line = 0
+        frame = 0
+        cn_phot = 0
+        Turns1 = []
+        Turns2 = []
+        
+        
+        LineStart = 4
+        LineStop = 2
+        Frame = 3
+        if 'ImgHdr_LineStart' in head:
+            LineStart = 2 ** (head['ImgHdr_LineStart'] - 1)
+        if 'ImgHdr_LineStop' in head:
+            LineStop = 2 ** (head['ImgHdr_LineStop'] - 1)
+        if 'ImgHdr_Frame' in head:    
+            Frame = 2 ** (head['ImgHdr_Frame'] - 1)
+            
+        if head['ImgHdr_BiDirect'] == 0: # monodirectional scan
+            tmpy, tmptcspc, tmpchan, tmpmarkers, num, loc =  ptu_reader.get_photon_chunk(cnt+1, photons)
+            
+            while num>0:
+                cnt += num
+                if len(y)>0:
+                    tmpy += tend
+                    
+                ind = (tmp_special>0) or ((tmp_chan<anzch) and(tmp_tcspc<Ngate*chDiv));
+                
+                y = np.concatenate((y, tmp_sync[ind]))  # Appending selected elements to y
+                tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc[ind] / chDiv) ))  # Appending selected elements to tmpx
+                chan = np.concatenate((chan, tmp_chan[ind] ))  # Appending selected elements to chan
+                markers = np.concatenate((markers, tmp_special[ind]))  # Appending selected elements to markers
 
-        tag = np.zeros((nx, ny, len(set(ptu_reader.channel)), nz))
-        tau = np.zeros_like(tag)
+                if LineStart == LineStop:
+                    tmpturns = y[markers == LineStart]
+                    if len(Turns1) > len(Turns2):
+                        Turns1.extend(tmpturns[1::2])
+                        Turns2.extend(tmpturns[::2])
+                    else:
+                        Turns1.extend(tmpturns[::2])
+                        Turns2.extend(tmpturns[1::2])
+                else:
+                    Turns1.extend(y[markers == LineStart])
+                    Turns2.extend(y[markers == LineStop])
+                
+                Framechange = y[markers == np.uint8(Frame)]    
+                ind = (markers != 0)
+                y = np.delete(y, ind)
+                tmpx = np.delete(tmpx, ind)
+                chan = np.delete(chan, ind)
+                markers = np.delete(markers, ind)
 
-        while cnt < num_records:
-            end_idx = min(cnt + photons, num_records)
-            tmp_sync, tmp_tcspc, tmp_chan, tmp_special = ptu_reader.get_photon_chunk(cnt, end_idx)
+                tend = y[-1] + loc     
+            
+                if len(Framechange)>=1:
+                    for k in range(len(Framechange)):
+                        line = 0
+                        ind = y<Framechange[k]
+                        yf = y[ind]
+                        tmpxf = tmpx[ind]
+                        chanf = chan[ind]
+                        
+                        y = np.delete(y, ind)
+                        tmpx = np.delete(tmpx, ind)
+                        chan = np.delete(chan, ind)
+                        markers = np.delete(markers, ind)
+                        
+                        Turns2f = Turns2[Turns2<Framechange[k]]
+                        Turns1f = Turns1[Turns1<Framechange[k]]
+                        Turns2 = np.delete(Turns2,Turns2<Framechange[k])
+                        Turns1 = np.delete(Turns1,Turns1<Framechange[k])
+                        
+                        if len(Turns2f) > 1:
+                            for j in range(len(Turns2f)):
 
-            cnt += len(tmp_sync)
-            tmp_sync += tend
+                                t1 = Turns1f[0]
+                                t2 = Turns2f[0]
 
-            y = tmp_sync
-            tmpx = tmp_tcspc
-            markers = tmp_special
+                                ind = yf <= t1
+                                yf = yf[~ind]
+                                tmpxf = tmpxf[~ind]
+                                chanf = chanf[~ind]
+                                # markersf = markersf[~ind]  # Uncomment if markersf is used
 
-            Framechange = y[markers & (1 << (head['ImgHdr_Frame'] - 1)) > 0]
+                                ind = (yf > t1) & (yf < t2)
+                                
+                                im_frame[cn_phot:cn_phot + sum(ind)] = np.uint16(frame * np.ones(sum(ind)))
+                                im_sync[cn_phot:cn_phot + sum(ind)] = yf[ind]
+                                im_tcspc[cn_phot:cn_phot + sum(ind)] = np.uint16(tmpxf[ind])
+                                im_chan[cn_phot:cn_phot + sum(ind)] = np.uint8(chanf[ind])
+                                im_line[cn_phot:cn_phot + sum(ind)] = np.uint16(line * np.ones(sum(ind)))
+                                im_col[cn_phot:cn_phot + sum(ind)] = np.uint16(np.floor(nx * (yf[ind] - t1) / (t2 - t1)))
 
-            if Framechange.size > 0:
-                for k in range(Framechange.size):
-                    line = 1
-                    ind = y < Framechange[k]
+                                cn_phot += sum(ind)
+                                
+                                dt[line] = t2 - t1
+                                line += 1
 
-                    yf = y[ind]
-                    tmpxf = tmpx[ind]
-                    chanf = tmp_chan[ind]
+                                Turns1f = Turns1f[1:]
+                                Turns2f = Turns2f[1:]
 
-                    y = y[~ind]
-                    tmpx = tmpx[~ind]
-                    tmp_chan = tmp_chan[~ind]
+                        [tmptag, tmptau] = Process_Frame(im_sync[im_frame == frame],im_col[im_frame == frame],\
+                                                         im_line[im_frame == frame],im_chan[im_frame == frame],\
+                                                             im_tcspc[im_frame == frame],head)
+                        if tmptag.size > 0:
+                            tag[:,:,:,frame] = tmptag
+                            tau[:,:,:,frame] = tmptau
+                        
+                        frame += 1
+                        
+                tmpy, tmptcspc, tmpchan, tmpmarkers, num, loc =  ptu_reader.get_photon_chunk(cnt+1, photons)
+            
+            head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
+            head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']    
+            im_frame = im_frame[:cn_phot]
+            im_sync = im_sync[:cn_phot]
+            im_tcspc = im_tcspc[:cn_phot]
+            im_chan = im_chan[:cn_phot]
+            im_line = im_line[:cn_phot]
+            im_col = im_col[:cn_phot]
+               
+        elif head['ImgHdr_BiDirect'] == 1: # bidirectional scan           
+             tmpy, tmptcspc, tmpchan, tmpmarkers, num, loc =  ptu_reader.get_photon_chunk(cnt+1, photons) 
+             while num>0:
+                 cnt += num
+                 if len(y)>0:
+                     tmpy += tend
+                     
+                 ind = (tmpchan < anzch) & (tmptcspc <= Ngate * chDiv)
 
-                    Turns2f = [val for val in Turns2 if val < Framechange[k]]
-                    Turns1f = [val for val in Turns1 if val < Framechange[k]]
+                 y = np.concatenate([y, tmpy[ind]])
+                 tmpx = np.concatenate([tmpx, np.floor(tmptcspc[ind] / chDiv).astype(int) ])
+                 chan = np.concatenate([chan, tmpchan[ind]])
+                 markers = np.concatenate([markers, tmpmarkers[ind]])
 
-                    Turns2 = [val for val in Turns2 if val >= Framechange[k]]
-                    Turns1 = [val for val in Turns1 if val >= Framechange[k]]
+                 if LineStart == LineStop:
+                     tmpturns = y[markers == LineStart]
+                     if len(Turns1) > len(Turns2):  # first turn is a LineStop
+                         Turns1 = np.concatenate([Turns1, tmpturns[1::2]])  # select even indices
+                         Turns2 = np.concatenate([Turns2, tmpturns[0::2]])  # select odd indices
+                     else:
+                         Turns1 = np.concatenate([Turns1, tmpturns[0::2]])  # select odd indices
+                         Turns2 = np.concatenate([Turns2, tmpturns[1::2]])  # select even indices
+                 else:
+                     Turns1 = np.concatenate([Turns1, y[markers == LineStart]])
+                     Turns2 = np.concatenate([Turns2, y[markers == LineStop]])
 
-                    if len(Turns2f) > 1:
-                        for j in range(len(Turns2f)):
-                            t1 = Turns1f[0]
-                            t2 = Turns2f[0]
+                 Framechange = y[markers == Frame]
 
-                            ind = (yf > t1) & (yf < t2)
+                 ind = (markers != 0)
+                 y = y[~ind]
+                 tmpx = tmpx[~ind]
+                 chan = chan[~ind]
+                 markers = markers[~ind]
+                 
+                 tend = y[-1] + loc
+                 
+                 if len(Framechange) >= 1:
+                     for k in range(len(Framechange)):
+                         line = 0
+                         ind = y < Framechange[k]
+                         
+                         yf = y[ind]
+                         tmpxf = tmpx[ind]
+                         chanf = chan[ind]
+                         markersf = markers[ind]
+                         
+                         y = y[~ind]
+                         tmpx = tmpx[~ind]
+                         chan = chan[~ind]
+                         markers = markers[~ind]
+                         
+                         Turns2f = Turns2[Turns2 <= Framechange[k]]
+                         Turns1f = Turns1[Turns1 <= Framechange[k]]
+                         Turns2 = Turns2[Turns2 > Framechange[k]]
+                         Turns1 = Turns1[Turns1 > Framechange[k]]
+                         
+                         if len(Turns2f) > 2:
+                             for j in range(0, 2 * (len(Turns2f) // 2 - 1), 2):
+                                 t1 = Turns1f[0]
+                                 t2 = Turns2f[0]
+                                 
+                                 ind = (yf < t1)
+                                 yf = yf[~ind]
+                                 tmpxf = tmpxf[~ind]
+                                 chanf = chanf[~ind]
+                                 markersf = markersf[~ind]
+                                 
+                                 ind = (yf >= t1) & (yf <= t2)
+                                 
+                                 im_frame[cn_phot:cn_phot + np.sum(ind)] = np.uint16(frame)
+                                 im_sync[cn_phot:cn_phot + np.sum(ind)] = yf[ind]
+                                 im_tcspc[cn_phot:cn_phot + np.sum(ind)] = np.uint16(tmpxf[ind])
+                                 im_chan[cn_phot:cn_phot + np.sum(ind)] = np.uint8(chanf[ind])
+                                 im_line[cn_phot:cn_phot + np.sum(ind)] = np.uint16(line)
+                                 im_col[cn_phot:cn_phot + np.sum(ind)] = np.uint16(np.floor(nx * (yf[ind] - t1) / (t2 - t1)))
+                                 
+                                 cn_phot += np.sum(ind)
+                                 dt[line] = t2 - t1
+                                 line += 1
+                                 
+                                 t1 = Turns1f[1] 
+                                 t2 = Turns2f[1]
+                                 
+                                 ind = (yf < t1)
+                                 yf = yf[~ind]
+                                 tmpxf = tmpxf[~ind]
+                                 chanf = chanf[~ind]
+                                 markersf = markersf[~ind]
+                                 
+                                 ind = (yf >= t1) & (yf <= t2)
+                                 
+                                 im_frame[cn_phot:cn_phot + np.sum(ind)] = np.uint16(frame)
+                                 im_sync[cn_phot:cn_phot + np.sum(ind)] = yf[ind]
+                                 im_tcspc[cn_phot:cn_phot + np.sum(ind)] = np.uint16(tmpxf[ind])
+                                 im_chan[cn_phot:cn_phot + np.sum(ind)] = np.uint8(chanf[ind])
+                                 im_line[cn_phot:cn_phot + np.sum(ind)] = np.uint16(line)
+                                 im_col[cn_phot:cn_phot + np.sum(ind)] = np.uint16(nx - np.floor(nx * (yf[ind] - t1) / (t2 - t1)))
+                                 
+                                 cn_phot += np.sum(ind)
+                                 dt[line] = t2 - t1
+                                 line += 1
+                                 
+                                 Turns1f = Turns1f[2:]
+                                 Turns2f = Turns2f[2:]
+                                 
+                                 
+                         # Process the frame data
+                         tmptag, tmptau = Process_Frame(im_sync[im_frame == frame], im_col[im_frame == frame], im_line[im_frame == frame], im_chan[im_frame == frame], im_tcspc[im_frame == frame], head)
+                         if tmptag.size > 0:
+                             tag[:, :, :, frame] = tmptag
+                             tau[:, :, :, frame] = tmptau
+                         
+                         frame += 1
 
-                            im_frame.extend([frame] * np.sum(ind))
-                            im_sync.extend(yf[ind])
-                            im_tcspc.extend(tmpxf[ind])
-                            im_chan.extend(chanf[ind])
-                            im_line.extend([line] * np.sum(ind))
-                            im_col.extend(1 + np.floor(nx * (yf[ind] - t1) / (t2 - t1)))
+                    # Read the next chunk of data
+                 tmpy, tmptcspc, tmpchan, tmpmarkers, num, loc =  ptu_reader.get_photon_chunk(cnt+1, photons)
+             if len(Turns2) > 0:
+                 t1 = Turns1[-2]
+                 t2 = Turns2[-2]
+                 
+                 ind = y < t1
+                 y = y[~ind]
+                 tmpx = tmpx[~ind]
+                 chan = chan[~ind]
+                 
+                 ind = (y >= t1) & (y <= t2)
+                 
+                 im_frame[cn_phot:cn_phot + np.sum(ind)] = np.uint16(frame)
+                 im_sync[cn_phot:cn_phot + np.sum(ind)] = y[ind]
+                 im_tcspc[cn_phot:cn_phot + np.sum(ind)] = np.uint16(tmpx[ind])
+                 im_chan[cn_phot:cn_phot + np.sum(ind)] = np.uint8(chan[ind])
+                 im_line[cn_phot:cn_phot + np.sum(ind)] = np.uint16(line)
+                 im_col[cn_phot:cn_phot + np.sum(ind)] = np.uint16(np.floor(nx * (y[ind] - t1) / (t2 - t1)))
+                 dt[line] = t2 - t1
+                 
+                 line += 1
+                 cn_phot += np.sum(ind)
+                 
+                 t1 = Turns1[-1]
+                 t2 = Turns2[-1]
+                 
+                 ind = y < t1
+                 y = y[~ind]
+                 tmpx = tmpx[~ind]
+                 chan = chan[~ind]
+                 
+                 ind = (y >= t1) & (y <= t2)
+                 
+                 im_frame[cn_phot:cn_phot + np.sum(ind)] = np.uint16(frame)
+                 im_sync[cn_phot:cn_phot + np.sum(ind)] = y[ind]
+                 im_tcspc[cn_phot:cn_phot + np.sum(ind)] = np.uint16(tmpx[ind])
+                 im_chan[cn_phot:cn_phot + np.sum(ind)] = np.uint8(chan[ind])
+                 im_line[cn_phot:cn_phot + np.sum(ind)] = np.uint16(line)
+                 im_col[cn_phot:cn_phot + np.sum(ind)] = np.uint16(nx - np.floor(nx * (y[ind] - t1) / (t2 - t1)))
+                 
+                 cn_phot += np.sum(ind)
+                 dt[line] = t2 - t1
+                 
+                 line += 1
 
-                            cn_phot += np.sum(ind)
-                            dt[line - 1] = t2 - t1
-                            line += 1
+                
+            
+             tmptag, tmptau = Process_Frame(im_sync[im_frame == frame], im_col[im_frame == frame],\
+                                            im_line[im_frame == frame], im_chan[im_frame == frame],\
+                                                im_tcspc[im_frame == frame], head)
+             if frame <= nz and tmptag.size > 0:
+                 tag[:, :, :, frame] = tmptag
+                 tau[:, :, :, frame] = tmptau
 
-                            Turns1f = Turns1f[1:]
-                            Turns2f = Turns2f[1:]
+             head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
+             head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']
+             # Trim arrays to the current number of photons
+             im_frame = im_frame[:cn_phot]
+             im_sync = im_sync[:cn_phot]
+             im_tcspc = im_tcspc[:cn_phot]
+             im_chan = im_chan[:cn_phot]
+             im_line = im_line[:cn_phot]
+             im_col = im_col[:cn_phot]
+            
+        SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
+        maxch_n = len(dind)
+        
+        tcspc_pix = np.zeros((nx, ny, Ngate, maxch_n))
+        timeF = [None] * maxch_n  # Initialize a list to store time data for each channel
+        tags = np.zeros((nx, ny, maxch_n))
+        taus = np.zeros_like(tags)
+        binT = np.transpose(np.tile(np.arange(1, Ngate + 1).reshape(-1, 1, 1) * Resolution, (1, nx, ny)), (1, 2, 0))  # 3D time axis
+        
+        for ch in range(maxch_n):
+            ind = (im_chan == dind[ch] + 1)
+            tcspc_pix[:, :, :, ch] = mHist3(im_line[ind].astype(float), 
+                                            im_col[ind].astype(float), 
+                                            im_tcspc[ind].astype(float), 
+                                            np.arange(nx), 
+                                            np.arange(ny), 
+                                            np.arange(Ngate))
+            
+            timeF[ch] = np.round(im_sync[ind] / SyncRate / Resolution / 1e-9) + im_tcspc[ind].astype(float)
+            tags[:, :, ch] = np.sum(tcspc_pix[:, :, :, ch], axis=2)
+            taus[:, :, ch] = np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch], axis=2) / tags[:, :, ch]) -
+                                             (np.sum(binT * tcspc_pix[:, :, :, ch], axis=2) / tags[:, :, ch]) ** 2))
+            
+            
+        filename = f"{filename[:-4]}_FLIM_data.pkl"
 
-                    frame += 1
-
-            tend = y[-1]
-
-        head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
-        head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']
-
+        # Create a dictionary to store all variables
+        data_to_save = {
+            'tag': tag,
+            'tau': tau,
+            'tags': tags,
+            'taus': taus,
+            'time': timeF,
+            'tcspc_pix': tcspc_pix,
+            'head': head,
+            'im_sync': im_sync,
+            'im_tcspc': im_tcspc,
+            'im_line': im_line,
+            'im_col': im_col,
+            'im_chan': im_chan,
+            'im_frame': im_frame
+            }
+        
+        # Save the data using pickle
+        with open(filename, 'wb') as f:
+            pickle.dump(data_to_save, f)    
+            
+            
+            
+      
     else:
         print("Unsupported ImgHdr_Ident value:", head['ImgHdr_Ident'])
         return None, None, None, None, None, None, None
 
     # Plot if required
     if plt_flag:
-        x = head['ImgHdr_X0'] + np.arange(1, nx + 1) * head['ImgHdr_PixResol']
-        y = head['ImgHdr_Y0'] + np.arange(1, ny + 1) * head['ImgHdr_PixResol']
+        x = head['ImgHdr_X0'] + np.arange(nx) * head['ImgHdr_PixResol']
+        y = head['ImgHdr_Y0'] + np.arange(ny) * head['ImgHdr_PixResol']
 
-        tags = np.sum(im_sync, axis=0)
-        taus = np.sum(im_tcspc, axis=0)
+        tagT = np.sum(tags, axis=2)
+        tauT = np.sum(taus, axis=2)
 
         plt.figure()
-        plt.imshow(tags, extent=(x.min(), x.max(), y.min(), y.max()))
+        plt.imshow(tagT, extent=(x.min(), x.max(), y.min(), y.max()))
         plt.gca().set_aspect('equal', adjustable='box')
         plt.gca().invert_yaxis()
         plt.xlabel('x / µm')
@@ -780,7 +1431,7 @@ def PTU_ScanRead(filename, plt_flag=False):
         plt.show()
 
         plt.figure()
-        plt.imshow(taus, extent=(x.min(), x.max(), y.min(), y.max()))
+        plt.imshow(tauT, extent=(x.min(), x.max(), y.min(), y.max()))
         plt.gca().set_aspect('equal', adjustable='box')
         plt.gca().invert_yaxis()
         plt.xlabel('x / µm')
