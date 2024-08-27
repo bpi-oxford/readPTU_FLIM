@@ -399,7 +399,7 @@ class PTUreader():
         self.tcspc   = tcspc.astype(np.uint16, copy=False)
         self.channel = chan.astype(np.uint8,  copy=False)
         self.special = special.astype(np.uint8, copy=False)
-        self.num     = num.astype(np.uint16, copy=False)   
+        self.num     = num 
         last_zero_index = np.where(index == 0)[0][-1] if np.any(index == 0) else -1
         self.loc = num - (last_zero_index + 1) if last_zero_index != -1 else num
         
@@ -413,7 +413,7 @@ class PTUreader():
     
     def get_photon_chunk(self, start_idx, end_idx):
        """Get a chunk of photon data from start_idx to end_idx."""
-       return self._ptu_read_raw_data(start_idx, end_idx)
+       return self._ptu_read_raw_data([start_idx, end_idx])
     
 def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head):
     Resolution = max(head['MeasDesc_Resolution'] * 1e9, 0.256)  # resolution of 1 ns to calculate average lifetimes
@@ -584,7 +584,7 @@ def PTU_ScanRead(filename, plt_flag=False):
                 if len(y)>0:
                     tmp_sync = tmp_sync + tend
                 
-                ind = (tmp_special>0) or ((tmp_chan<anzch) and(tmp_tcspc<Ngate*chDiv));
+                ind = (tmp_special>0) | ((tmp_chan<anzch) & (tmp_tcspc<Ngate*chDiv));
                 
                 y = np.concatenate((y, tmp_sync[ind]))  # Appending selected elements to y
                 tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc[ind] / chDiv) ))  # Appending selected elements to tmpx
@@ -594,14 +594,14 @@ def PTU_ScanRead(filename, plt_flag=False):
                 if LineStart == LineStop:
                     tmpturns = y[markers == LineStart]
                     if len(Turns1) > len(Turns2):
-                        Turns1.extend(tmpturns[1::2])
-                        Turns2.extend(tmpturns[::2])
+                        Turns1 = np.concatenate([Turns1, tmpturns[1::2]])  # Add elements to Turns1
+                        Turns2 = np.concatenate([Turns2, tmpturns[::2]])   # Add elements to Turns2
                     else:
-                        Turns1.extend(tmpturns[::2])
-                        Turns2.extend(tmpturns[1::2])
-                else:
-                    Turns1.extend(y[markers == LineStart])
-                    Turns2.extend(y[markers == LineStop])
+                        Turns1 = np.concatenate([Turns1, tmpturns[::2]])
+                        Turns2 = np.concatenate([Turns2, tmpturns[1::2]])
+                else:   
+                    Turns1 = np.concatenate([Turns1, y[markers == LineStart]])
+                    Turns2 = np.concatenate([Turns2, y[markers == LineStop]])
 
                 ind = (markers != 0)
                 y = np.delete(y, ind)
@@ -621,7 +621,7 @@ def PTU_ScanRead(filename, plt_flag=False):
                         tmpx = np.delete(tmpx, ind)
                         chan = np.delete(chan, ind)
 
-                        ind = (y >= t1) and (y <= t2)
+                        ind = (y >= t1) & (y <= t2)
 
                         im_sync.extend(y[ind])
                         im_tcspc.extend(tmpx[ind].astype(np.uint16))
@@ -665,7 +665,7 @@ def PTU_ScanRead(filename, plt_flag=False):
                 if len(y)>0:
                     tmp_sync = tmp_sync + tend
                 
-                ind = (tmp_special>0) or ((tmp_chan<anzch) and(tmp_tcspc<Ngate*chDiv));
+                ind = (tmp_special>0) | ((tmp_chan<anzch) & (tmp_tcspc<Ngate*chDiv));
                 
                 y = np.concatenate((y, tmp_sync[ind]))  # Appending selected elements to y
                 tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc[ind] / chDiv) ))  # Appending selected elements to tmpx
@@ -675,14 +675,14 @@ def PTU_ScanRead(filename, plt_flag=False):
                 if LineStart == LineStop:
                     tmpturns = y[markers == LineStart]
                     if len(Turns1) > len(Turns2):
-                        Turns1.extend(tmpturns[1::2])
-                        Turns2.extend(tmpturns[::2])
+                        Turns1 = np.concatenate([Turns1, tmpturns[1::2]])  # Add elements to Turns1
+                        Turns2 = np.concatenate([Turns2, tmpturns[::2]])   # Add elements to Turns2
                     else:
-                        Turns1.extend(tmpturns[::2])
-                        Turns2.extend(tmpturns[1::2])
-                else:
-                    Turns1.extend(y[markers == LineStart])
-                    Turns2.extend(y[markers == LineStop])
+                        Turns1 = np.concatenate([Turns1, tmpturns[::2]])
+                        Turns2 = np.concatenate([Turns2, tmpturns[1::2]])
+                else:   
+                    Turns1 = np.concatenate([Turns1, y[markers == LineStart]])
+                    Turns2 = np.concatenate([Turns2, y[markers == LineStop]])
 
                 ind = (markers != 0)
                 y = np.delete(y, ind)
@@ -1026,7 +1026,7 @@ def PTU_ScanRead(filename, plt_flag=False):
             
     elif head['ImgHdr_Ident'] == 9:          
         if 'ImgHdr_MaxFrames' in head:
-            nz = head(['ImgHdr_MaxFrames'])
+            nz = head['ImgHdr_MaxFrames']
         else:
             tim_p_frame = 1/head['ImgHdr_LineFrequency']/ny
             tot_time = head['TTResult_StopAfter']*10^-3
@@ -1038,7 +1038,7 @@ def PTU_ScanRead(filename, plt_flag=False):
         Ngate = int(np.ceil(1e9 * head['MeasDesc_GlobalResolution'] / Resolution)) + 1
         head['MeasDesc_Resolution'] = Resolution * 1e-9
         
-        _,_, tmpchan, tmpmarkers = ptu_reader.get_photon_chunk(1, photons)
+        sync, tcspc, tmpchan, tmpmarkers, num, loc = ptu_reader.get_photon_chunk(1, photons)
         dind = np.unique([val for i, val in enumerate(tmpchan) if not tmpmarkers[i]]) # the number of detectors
         tag = np.zeros((nx, ny, len(dind), nz))
         tau = np.copy(tag)
@@ -1046,7 +1046,7 @@ def PTU_ScanRead(filename, plt_flag=False):
         y = []
         tmpx = []
         chan = []
-        marker = []
+        markers = []
         
         dt = np.zeros(ny)
         nphot = head['TTResult_NumberOfRecords']
@@ -1084,24 +1084,24 @@ def PTU_ScanRead(filename, plt_flag=False):
                 if len(y)>0:
                     tmpy += tend
                     
-                ind = (tmp_special>0) or ((tmp_chan<anzch) and(tmp_tcspc<Ngate*chDiv));
+                ind = (tmpmarkers>0) | ((tmpchan<anzch) & (tmptcspc<Ngate*chDiv));
                 
-                y = np.concatenate((y, tmp_sync[ind]))  # Appending selected elements to y
-                tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc[ind] / chDiv) ))  # Appending selected elements to tmpx
-                chan = np.concatenate((chan, tmp_chan[ind] ))  # Appending selected elements to chan
-                markers = np.concatenate((markers, tmp_special[ind]))  # Appending selected elements to markers
+                y = np.concatenate((y, tmpy[ind]))  # Appending selected elements to y
+                tmpx = np.concatenate((tmpx, np.floor(tmptcspc[ind] / chDiv) ))  # Appending selected elements to tmpx
+                chan = np.concatenate((chan, tmpchan[ind] ))  # Appending selected elements to chan
+                markers = np.concatenate((markers, tmpmarkers[ind]))  # Appending selected elements to markers
 
                 if LineStart == LineStop:
                     tmpturns = y[markers == LineStart]
                     if len(Turns1) > len(Turns2):
-                        Turns1.extend(tmpturns[1::2])
-                        Turns2.extend(tmpturns[::2])
+                        Turns1 = np.concatenate([Turns1, tmpturns[1::2]])  # Add elements to Turns1
+                        Turns2 = np.concatenate([Turns2, tmpturns[::2]])   # Add elements to Turns2
                     else:
-                        Turns1.extend(tmpturns[::2])
-                        Turns2.extend(tmpturns[1::2])
-                else:
-                    Turns1.extend(y[markers == LineStart])
-                    Turns2.extend(y[markers == LineStop])
+                        Turns1 = np.concatenate([Turns1, tmpturns[::2]])
+                        Turns2 = np.concatenate([Turns2, tmpturns[1::2]])
+                else:   
+                    Turns1 = np.concatenate([Turns1, y[markers == LineStart]])
+                    Turns2 = np.concatenate([Turns2, y[markers == LineStop]])
                 
                 Framechange = y[markers == np.uint8(Frame)]    
                 ind = (markers != 0)
