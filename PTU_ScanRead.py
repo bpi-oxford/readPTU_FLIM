@@ -1,165 +1,16 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# Read PTU Library and FLIM data 
-# Author: Sumeet Rohilla
-# sumeetrohilla@gmail.com
-
-# PTU Reader Library
-
+# -*- coding: utf-8 -*-
 """
-Created on Tue, 14 May 2019
-Updated on Sun, 20 Dec, 2020
-@author: SumeetRohilla, sumeetrohilla@gmail.com
+Created on Fri Aug 23 16:46:33 2024
 
-"Good artists copy; great artists steal."
-
-Largely inspired from examples:
-- PicoQuant demo codes
-  https://github.com/PicoQuant/PicoQuant-Time-Tagged-File-Format-Demos
-- from a jupyter notebook by tritemio on GitHub:
-  https://gist.github.com/tritemio/734347586bc999f39f9ffe0ac5ba0e66
-    
-Aim : Open and convert Picoquant .ptu image files for FLIM analysis
- *  Use : Simply select your .ptu file and library will provide:
- *  1) Lifetime image stack for each channel (1-8). 
- *     flim_data_stack  = [numPixX numPixY numDetectors numTCSPCbins]
- *     Fluorescence decays in each pixel/num_detection_channel are available for the whole acquisition
- *     Frame-wise info is not implemented here, but in principle is pretty straightforwad to implement
- *  2) Intensity is just acquisition flim_data_stack(in photons) is accessed by binning across axis  = numTCSPCbins and numDetectors
- *  3) get_flim_data_stack class method is numba accelarated (using @jit decorator) to gain speed in building flim_data_stack from raw_tttr_data 
- 
+@author: narai
 """
-
-
-import time
-import sys
 import struct
-# import io
+import datetime
 import numpy as np
-# from collections import OrderedDict, namedtuple
-# from sys import getsizeof
-# import gc
-# import matplotlib.pyplot as plt
-from numba import njit
-# from numba.experimental import jitclass
-# from numba.types import uint16
-
-@njit
-def get_flim_data_stack_static(sync, tcspc, channel, special, header_variables):
-
-    ImgHdr_Ident              = header_variables[0]
-    MeasDesc_Resolution       = header_variables[1]
-    MeasDesc_GlobalResolution = header_variables[2]
-    ImgHdr_PixX               = header_variables[3]
-    ImgHdr_PixY               = header_variables[4]
-    ImgHdr_LineStart          = header_variables[5]
-    ImgHdr_LineStop           = header_variables[6]
-    ImgHdr_Frame              = header_variables[7]
-
-    if (ImgHdr_Ident == 9) or (ImgHdr_Ident == 3):
-        tcspc_bin_resolution = 1e9*MeasDesc_Resolution          # in Nanoseconds
-        sync_rate            = np.ceil(MeasDesc_GlobalResolution*1e9)  # in Nanoseconds
-
-        num_of_detectors     = np.max(channel)+1 # changed NK
-        # num_tcspc_channel    = np.max(tcspc)+1
-        num_tcspc_channel    = np.floor(sync_rate/tcspc_bin_resolution)+1 # changed NK
-
-        # num_of_detectors     = np.unique(channel).size 
-        # num_tcspc_channel    = np.unique(tcspc).size
-        num_pixel_X          = ImgHdr_PixX
-        num_pixel_Y          = ImgHdr_PixY
-
-        flim_data_stack      = np.zeros((num_pixel_Y, num_pixel_X, num_of_detectors,num_tcspc_channel), dtype  = np.uint16)
-
-        # Markers necessary to make FLIM image stack
-        LineStartMarker = 2**(ImgHdr_LineStart-1)
-        LineStopMarker  = 2**(ImgHdr_LineStop-1)
-        FrameMarker     = 2**(ImgHdr_Frame-1)
-
-        # Get Number of Frames
-        FrameSyncVal    = sync[np.where(special == FrameMarker)]
-        num_of_Frames   = FrameSyncVal.size
-        read_data_range = np.where(sync == FrameSyncVal[num_of_Frames-1])[0][0]
-
-        L1  = sync[np.where(special == LineStartMarker)] # Get Line start marker sync values
-        L2  = sync[np.where(special == LineStopMarker)]  # Get Line start marker sync values
-
-        # syncPulsesPerLine = np.floor(np.mean(L2[10:] - L1[10:]))
-        min_line_count = min(len(L2),len(L1))
-        syncPulsesPerLine = np.floor(np.mean(L2[10:min_line_count] - L1[10:min_line_count]))
-
-        # Get pixel dwell time values from header for PicoQuant_FLIMBee or Zeiss_LSM scanner
-
-        # if 'StartedByRemoteInterface' in head.keys():
-
-        #     #syncPulsesPerLine  = round((head.TimePerPixel/head.MeasDesc_GlobalResolution)*num_pixel_X);
-        #     syncPulsesPerLine = np.floor(np.mean(L2[10:] - L1[10:])) 
-        # else:  
-        #     #syncPulsesPerLine  = floor(((head.ImgHdr_TimePerPixel*1e-3)/head.MeasDesc_GlobalResolution)*num_pixel_X);
-        #     syncPulsesPerLine = np.floor(np.mean(L2[10:] - L1[10:]))
-
-        # Initialize Variable
-        currentLine        = 0
-        currentSync        = 0
-        syncStart          = 0
-        currentPixel       = 0
-        unNoticed_events   = 0
-        countFrame         = 0
-        insideLine         = False
-        insideFrame        = False
-        isPhoton           = False
-
-        for event in range(read_data_range+1):
-            if num_of_Frames == 1:
-                # when only zero/one frame marker is present in TTTR file
-                insideFrame = True
-
-            currentSync    = sync[event]
-            special_event  = special[event]
-
-            # is the record a valid photon event or a special marker type event
-            if special[event] == 0:
-                isPhoton = True
-            else:
-                isPhoton = False
-
-            if not(isPhoton):         
-                #This is not needed once inside the first Frame marker
-                if (special_event == FrameMarker):
-                    insideFrame  = True
-                    countFrame   += 1
-                    currentLine  = 0
-
-                if (special_event == LineStartMarker):
-
-                    insideLine = True
-                    syncStart  = currentSync
-
-                elif (special_event == LineStopMarker):
-
-                    insideLine   = False
-                    currentLine  += 1
-                    syncStart    = 0 
-
-                    if (currentLine >= num_pixel_Y):
-                        insideFrame  = False
-                        currentLine  = 0
-
-            # Build FLIM image data stack here for N-spectral/tcspc-input channels
-            if (isPhoton and insideLine and insideFrame):
-
-                currentPixel = int(np.floor((((currentSync - syncStart)/syncPulsesPerLine)*num_pixel_X)))
-                tmpchan   = channel[event]
-                tmptcspc  = tcspc[event]
-
-                if (currentPixel < num_pixel_X) and (tmptcspc<num_tcspc_channel):
-                    flim_data_stack[currentLine][currentPixel][tmpchan][tmptcspc] +=1
-        # else:        
-        #     print("Piezo Scanner Data Reader Not Implemented Yet!!! \n")
-
-    return flim_data_stack
-
+import matplotlib.pyplot as plt
+from scipy.io import savemat
+from tqdm import tqdm
+import time
 
 class PTUreader():
     
@@ -253,8 +104,16 @@ class PTUreader():
         
         # Read  and print header if set True
         self._ptu_read_head(self.ptu_data_string)
-        # Read and return Raw TTTR Data
-        self._ptu_read_raw_data()
+        
+        # # Read and return Raw TTTR Data
+        # self._ptu_read_raw_data()
+        self.sync = None
+        self.tcspc = None
+        self.channel = None
+        self.special = None
+        self.num     = None
+        self.loc     = None
+        self.num_records = self.head['TTResult_NumberOfRecords']
         
         if self.print_header == True:
             return self._print_ptu_head()
@@ -348,7 +207,7 @@ class PTUreader():
             val = self.head[keys] 
             print("{:<30} {:<8}".format(keys, val))     
     
-    def _ptu_read_raw_data(self):
+    def _ptu_read_raw_data(self, cnts = None):
     
         '''
         This function reads single-photon data from the file 's'
@@ -363,16 +222,28 @@ class PTUreader():
 
         '''
 
+        if cnts is None or len(cnts) == 0:
+            cnts = [0, 0]
+        elif len(cnts) < 2:
+            cnts = [0, cnts[0]]
+
+        if cnts[1] > 0:
+            with open(self.ptu_name, 'rb') as fid:
+                fid.seek(self.head['Header_End'], 0)
+
+                if cnts[0] > 1:
+                    fid.seek(4 * (cnts[0] - 1), 1)
+                
+                t3records = np.fromfile(fid, dtype='uint32', count=cnts[1])
+                num = t3records.size
+        else:
+            t3records = np.frombuffer(self.ptu_data_string, dtype='uint32', offset=self.head['Header_End'])
+            num = t3records.size
+            
         record_type = self.rec_type_r[self.head['TTResultFormat_TTTRRecType']]
-
-        num_T3records = self.head['TTResult_NumberOfRecords']
-
-        #Read all T3 records in memory
-        t3records = np.frombuffer(self.ptu_data_string, dtype='uint32', count=num_T3records, offset= self.head['Header_End'])
-
-        # # Clear ptu string data from memory and delete it's existence
-        # del self.ptu_data_string
-
+        # num_T3records = self.head['TTResult_NumberOfRecords']
+        
+     
         #Next is to do T3Records formatting according to Record_type
 
         if record_type == 'rtPicoHarpT3':
@@ -518,7 +389,7 @@ class PTUreader():
         chan     = np.delete(chan, np.where(index == 1), axis = 0)
         special  = np.delete(special, np.where(index == 1), axis = 0)
              
-        del index
+        # del index
 
         # Convert to appropriate data type to save memory
 
@@ -526,52 +397,398 @@ class PTUreader():
         self.tcspc   = tcspc.astype(np.uint16, copy=False)
         self.channel = chan.astype(np.uint8,  copy=False)
         self.special = special.astype(np.uint8, copy=False)
+        self.num     = num.astype(np.uint16, copy=False)   
+        last_zero_index = np.where(index == 0)[0][-1] if np.any(index == 0) else -1
+        self.loc = num - (last_zero_index + 1) if last_zero_index != -1 else num
+        
+
         print("Raw Data has been Read!\n")
 
-        return None
+        return self.sync, self.tcspc, self.channel, self.special, self.num, self.loc
     
-    def get_flim_data_stack(self): 
+    
+    
+    
+    def get_photon_chunk(self, start_idx, end_idx):
+       """Get a chunk of photon data from start_idx to end_idx."""
+       return self._ptu_read_raw_data(start_idx, end_idx)
+    
+    
+def PTU_ScanRead(filename, plt_flag=False):
+    photons = int(1e7) # number of photons to read at a time. Can be adjusted based on the system memory
+    
+    ptu_reader = PTUreader(filename)
+    head = ptu_reader.head
+    
+    if not head:
+        print("Header data could not be read. Aborting...")
+        return None, None, None, None, None, None, None
+
+    nx = head['ImgHdr_PixX']
+    ny = head['ImgHdr_PixY']
+    
+  
+   
+
+    num_records = ptu_reader.num_records
+    if head['ImgHdr_Ident'] in [1, 6]:  # Scan Cases 1 and 6
+        anzch = 32  # max number of channels (can be 64 now for the new MultiHarp)
         
-        # Check if it's FLIM image
-        if self.head["Measurement_SubMode"] == 0:
-            raise IOError("This is not a FLIM PTU file.!!! \n")
-            sys.exit()
-        elif (self.head["ImgHdr_Ident"] == 1) or (self.head["ImgHdr_Ident"] == 5):
-            raise IOError("Piezo Scanner Data Reader Not Implemented Yet!!! \n")
-            sys.exit()
+        # Common settings
+        Resolution = max([1e9 * head['MeasDesc_Resolution'], 0.064])
+        chDiv = 1e-9 * Resolution / head['MeasDesc_Resolution']
+        Ngate = int(np.ceil(1e9 * head['MeasDesc_GlobalResolution'] / Resolution)) + 1
+        head['MeasDesc_Resolution'] = Resolution * 1e-9
+
+        # defaults
+        LineStart = 4
+        LineStop = 2
+        
+        if 'ImgHdr_LineStart' in head:
+            LineStart = 2 ** (head['ImgHdr_LineStart'] - 1)
+        if 'ImgHdr_LineStop' in head:
+            LineStop = 2 ** (head['ImgHdr_LineStop'] - 1)
+        
+        y = []
+        tmpx = []
+        chan = []
+        markers = []
+        dt = np.zeros((ny,1))
+        
+        im_sync = []
+        im_tcspc = []
+        im_chan = []
+        im_line = []
+        im_col = []
+        im_frame = []
+        Turns1 = []
+        Turns2 = []
+
+        cnt = 0
+        tend = 0
+        line = 0 # python compatible
+      
+        if head['ImgHdr_BiDirect'] == 0:  # Unidirectional scan
+            tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk([cnt+1, photons])
+            while num>0:
+              
+                cnt += num
+                if len(y)>0:
+                    tmp_sync = tmp_sync + tend
+                
+                ind = (tmp_special>0) or ((tmp_chan<anzch) and(tmp_tcspc<Ngate*chDiv));
+                
+                y = np.concatenate((y, tmp_sync[ind]))  # Appending selected elements to y
+                tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc[ind] / chDiv) + 1))  # Appending selected elements to tmpx
+                chan = np.concatenate((chan, tmp_chan[ind] + 1))  # Appending selected elements to chan
+                markers = np.concatenate((markers, tmp_special[ind]))  # Appending selected elements to markers
+
+                if LineStart == LineStop:
+                    tmpturns = y[markers == LineStart]
+                    if len(Turns1) > len(Turns2):
+                        Turns1.extend(tmpturns[1::2])
+                        Turns2.extend(tmpturns[::2])
+                    else:
+                        Turns1.extend(tmpturns[::2])
+                        Turns2.extend(tmpturns[1::2])
+                else:
+                    Turns1.extend(y[markers == LineStart])
+                    Turns2.extend(y[markers == LineStop])
+
+                ind = (markers != 0)
+                y = np.delete(y, ind)
+                tmpx = np.delete(tmpx, ind)
+                tmp_chan = np.delete(tmp_chan, ind)
+                markers = np.delete(markers, ind)
+
+                tend = y[-1] + loc
+# TODO: Modify beyond this line
+                if len(Turns2) > 1:
+                    for j in range(len(Turns2) - 1):
+                        t1 = Turns1[0]
+                        t2 = Turns2[0]
+
+                        ind = (y < t1)
+                        y = np.delete(y, ind)
+                        tmpx = np.delete(tmpx, ind)
+                        tmp_chan = np.delete(tmp_chan, ind)
+
+                        ind = (y >= t1) and (y <= t2)
+
+                        im_sync.extend(y[ind])
+                        im_tcspc.extend(tmpx[ind].astype(np.uint16))
+                        im_chan.extend(tmp_chan[ind].astype(np.uint8))
+                        im_line.extend([line].astype(np.uint16) * np.sum(ind))
+                        im_col.extend(np.floor(nx * (y[ind] - t1) / (t2 - t1))) # Python compatible, pixel starts from zero
+
+                        dt = t2 - t1
+                        line += 1
+
+                        Turns1 = Turns1[1:]
+                        Turns2 = Turns2[1:]
+                tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk([cnt+1, photons])
+            
+            
+            t1 = Turns1[-1]
+            t2 = Turns2[-1]
+
+            ind          = (y<t1);
+            y = np.delete(y, ind)
+            tmpx = np.delete(tmpx, ind)
+            tmp_chan = np.delete(tmp_chan, ind)
+
+            ind = (y>=t1) and (y<=t2);
+
+            im_sync   = [im_sync; y(ind)];
+            im_tcspc  = [im_tcspc; uint16(tmpx(ind))];
+            im_chan   = [im_chan; uint8(chan(ind))];
+            im_line   = [im_line; uint16(line.*ones(sum(ind),1))];
+            im_col    = [im_col;  uint16(1 + floor(nx.*(y(ind)-t1)./(t2-t1)))];
+            dt(line)  = t2-t1;
+
+                line = line +1;    
+            head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
+            head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']
+
+        else:  # Bidirectional scan
+            while cnt < num_records:
+                end_idx = min(cnt + photons, num_records)
+                tmp_sync, tmp_tcspc, tmp_chan, tmp_special = ptu_reader.get_photon_chunk(cnt, end_idx)
+
+                cnt += len(tmp_sync)
+                ind = (tmp_chan < anzch) & (tmp_tcspc <= Ngate * chDiv)
+
+                y = tmp_sync[ind] + tend
+                tmpx = np.floor(tmp_tcspc[ind] / chDiv).astype(int) + 1
+                tmp_chan = tmp_chan[ind] + 1
+
+                markers = tmp_special[ind]
+                if LineStart == LineStop:
+                    tmpturns = y[markers == LineStart]
+                    if len(Turns1) > len(Turns2):
+                        Turns1.extend(tmpturns[1::2])
+                        Turns2.extend(tmpturns[::2])
+                    else:
+                        Turns1.extend(tmpturns[::2])
+                        Turns2.extend(tmpturns[1::2])
+                else:
+                    Turns1.extend(y[markers == LineStart])
+                    Turns2.extend(y[markers == LineStop])
+
+                ind = (markers != 0)
+                y = np.delete(y, ind)
+                tmpx = np.delete(tmpx, ind)
+                tmp_chan = np.delete(tmp_chan, ind)
+                markers = np.delete(markers, ind)
+
+                tend = y[-1]
+
+                if len(Turns2) > 2:
+                    for j in range(0, 2 * (len(Turns2) // 2) - 1, 2):
+                        t1 = Turns1[0]
+                        t2 = Turns2[0]
+
+                        ind = (y < t1)
+                        y = np.delete(y, ind)
+                        tmpx = np.delete(tmpx, ind)
+                        tmp_chan = np.delete(tmp_chan, ind)
+                        markers = np.delete(markers, ind)
+
+                        ind = (y >= t1) & (y <= t2)
+
+                        im_sync.extend(y[ind])
+                        im_tcspc.extend(tmpx[ind])
+                        im_chan.extend(tmp_chan[ind])
+                        im_line.extend([line] * np.sum(ind))
+                        im_col.extend(1 + np.floor(nx * (y[ind] - t1) / (t2 - t1)))
+
+                        dt = t2 - t1
+                        line += 1
+
+                        t1 = Turns1[1]
+                        t2 = Turns2[1]
+
+                        ind = (y < t1)
+                        y = np.delete(y, ind)
+                        tmpx = np.delete(tmpx, ind)
+                        tmp_chan = np.delete(tmp_chan, ind)
+                        markers = np.delete(markers, ind)
+
+                        ind = (y >= t1) & (y <= t2)
+
+                        im_sync.extend(y[ind])
+                        im_tcspc.extend(tmpx[ind])
+                        im_chan.extend(tmp_chan[ind])
+                        im_line.extend([line] * np.sum(ind))
+                        im_col.extend(nx - np.floor(nx * (y[ind] - t1) / (t2 - t1)))
+
+                        dt = t2 - t1
+                        line += 1
+
+                        Turns1 = Turns1[2:]
+                        Turns2 = Turns2[2:]
+
+            head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
+            head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']
+
+    elif head['ImgHdr_Ident'] == 3:  # Multi-frame case (Ident = 3)
+        dt = np.zeros(ny)
+        f_times = []
+
+        while cnt < num_records:
+            end_idx = min(cnt + photons, num_records)
+            tmp_sync, tmp_tcspc, tmp_chan, tmp_special = ptu_reader.get_photon_chunk(cnt, end_idx)
+
+            cnt += len(tmp_sync)
+            tmp_sync += tend
+
+            y = tmp_sync
+            tmpx = tmp_tcspc
+            markers = tmp_special
+
+            F = y[markers & (1 << (head['ImgHdr_Frame'] - 1)) > 0]
+            while F.size > 0:
+                if F.size > 0:  # Frame by Frame
+                    ind = y < F[0]
+                    f_y = y[ind]
+                    f_x = tmpx[ind]
+                    f_ch = tmp_chan[ind]
+                    f_m = markers[ind]
+
+                    y = y[~ind]
+                    tmpx = tmpx[~ind]
+                    tmp_chan = tmp_chan[~ind]
+                    markers = markers[~ind]
+
+                    L1 = f_y[f_m & (1 << (head['ImgHdr_LineStart'] - 1)) > 0]
+                    L2 = f_y[f_m & (1 << (head['ImgHdr_LineStop'] - 1)) > 0]
+                    if L1.size > 1:
+                        frame += 1
+                        for j in range(L2.size):
+                            ind = (f_y > L1[j]) & (f_y < L2[j])
+
+                            im_sync.extend(f_y[ind])
+                            im_tcspc.extend(f_x[ind])
+                            im_chan.extend(f_ch[ind])
+                            im_line.extend([line] * np.sum(ind))
+                            im_col.extend(1 + np.floor(nx * (f_y[ind] - L1[j]) / (L2[j] - L1[j])))
+                            im_frame.extend([frame] * np.sum(ind))
+
+                            dt[line - 1] += L2[j] - L1[j]
+                            line += 1
+
+                        f_times.append(F[0])
+                        F = F[1:]
+
+            tend = y[-1]
+
+        head['ImgHdr_FrameTime'] = 1e9 * np.mean(np.diff(f_times)) / head['TTResult_SyncRate']
+        head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
+        head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime'] / frame
+
+    elif head['ImgHdr_Ident'] == 9:  # Multi-frame case (Ident = 9)
+        if 'ImgHdr_MaxFrames' in head:
+            nz = head['ImgHdr_MaxFrames']
         else:
-        # Create numpy array of important variables to be passed into numba accelaratd get_flim_data_stack_static function
-        # as numba doesn't recognizes python dict type files
-        # Check
+            time_per_frame = 1.0 / head['ImgHdr_LineFrequency'] * ny
+            total_time = head['TTResult_StopAfter'] * 1e-3
+            nz = int(np.ceil(total_time / time_per_frame))
 
-            header_variables  = np.array([self.head["ImgHdr_Ident"], self.head["MeasDesc_Resolution"],self.head["MeasDesc_GlobalResolution"],self.head["ImgHdr_PixX"], self.head["ImgHdr_PixY"], self.head["ImgHdr_LineStart"],self.head["ImgHdr_LineStop"], self.head["ImgHdr_Frame"]],dtype = np.uint64)
-        
-        sync        = self.sync 
-        tcspc       = self.tcspc
-        channel     = self.channel 
-        special     = self.special 
-        
-        # del self.sync, self.tcspc, self.channel , self.special
+        tag = np.zeros((nx, ny, len(set(ptu_reader.channel)), nz))
+        tau = np.zeros_like(tag)
 
-        flim_data_stack = get_flim_data_stack_static(sync, tcspc, channel, special, header_variables)
-        
-        if flim_data_stack.ndim == 4:
-            
-            tmp_intensity_image  = np.sum(flim_data_stack, axis = 3) # sum across tcspc bin
-            intensity_image      = np.sum(tmp_intensity_image, axis  = 2)# sum across spectral channels
-            
-        elif flim_data_stack.ndim == 3:
-            
-            intensity_image  = np.sum(flim_data_stack, axis = 3) # sum across tcspc bin, only 1 detection channel
-        
-        return flim_data_stack, intensity_image
+        while cnt < num_records:
+            end_idx = min(cnt + photons, num_records)
+            tmp_sync, tmp_tcspc, tmp_chan, tmp_special = ptu_reader.get_photon_chunk(cnt, end_idx)
 
-@njit
-def get_lifetime_image(flim_data_stack,channel_number,timegating_start1,timegating_stop1,meas_resolution,estimated_irf):
+            cnt += len(tmp_sync)
+            tmp_sync += tend
 
-    work_data  = flim_data_stack[:,:,channel_number,timegating_start1:timegating_stop1]
-    bin_range = np.reshape(np.linspace(0,timegating_stop1,timegating_stop1),(1,1,timegating_stop1))
+            y = tmp_sync
+            tmpx = tmp_tcspc
+            markers = tmp_special
 
-    fast_flim = (np.sum(work_data*bin_range,axis = 2)*meas_resolution)/np.sum(work_data,axis = 2)
+            Framechange = y[markers & (1 << (head['ImgHdr_Frame'] - 1)) > 0]
+
+            if Framechange.size > 0:
+                for k in range(Framechange.size):
+                    line = 1
+                    ind = y < Framechange[k]
+
+                    yf = y[ind]
+                    tmpxf = tmpx[ind]
+                    chanf = tmp_chan[ind]
+
+                    y = y[~ind]
+                    tmpx = tmpx[~ind]
+                    tmp_chan = tmp_chan[~ind]
+
+                    Turns2f = [val for val in Turns2 if val < Framechange[k]]
+                    Turns1f = [val for val in Turns1 if val < Framechange[k]]
+
+                    Turns2 = [val for val in Turns2 if val >= Framechange[k]]
+                    Turns1 = [val for val in Turns1 if val >= Framechange[k]]
+
+                    if len(Turns2f) > 1:
+                        for j in range(len(Turns2f)):
+                            t1 = Turns1f[0]
+                            t2 = Turns2f[0]
+
+                            ind = (yf > t1) & (yf < t2)
+
+                            im_frame.extend([frame] * np.sum(ind))
+                            im_sync.extend(yf[ind])
+                            im_tcspc.extend(tmpxf[ind])
+                            im_chan.extend(chanf[ind])
+                            im_line.extend([line] * np.sum(ind))
+                            im_col.extend(1 + np.floor(nx * (yf[ind] - t1) / (t2 - t1)))
+
+                            cn_phot += np.sum(ind)
+                            dt[line - 1] = t2 - t1
+                            line += 1
+
+                            Turns1f = Turns1f[1:]
+                            Turns2f = Turns2f[1:]
+
+                    frame += 1
+
+            tend = y[-1]
+
+        head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
+        head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']
+
+    else:
+        print("Unsupported ImgHdr_Ident value:", head['ImgHdr_Ident'])
+        return None, None, None, None, None, None, None
+
+    # Plot if required
+    if plt_flag:
+        x = head['ImgHdr_X0'] + np.arange(1, nx + 1) * head['ImgHdr_PixResol']
+        y = head['ImgHdr_Y0'] + np.arange(1, ny + 1) * head['ImgHdr_PixResol']
+
+        tags = np.sum(im_sync, axis=0)
+        taus = np.sum(im_tcspc, axis=0)
+
+        plt.figure()
+        plt.imshow(tags, extent=(x.min(), x.max(), y.min(), y.max()))
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.gca().invert_yaxis()
+        plt.xlabel('x / µm')
+        plt.ylabel('y / µm')
+        plt.title('Intensity')
+        plt.colorbar()
+        plt.show()
+
+        plt.figure()
+        plt.imshow(taus, extent=(x.min(), x.max(), y.min(), y.max()))
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.gca().invert_yaxis()
+        plt.xlabel('x / µm')
+        plt.ylabel('y / µm')
+        plt.title('FLIM')
+        plt.colorbar()
+        plt.show()
+
+    return head, np.array(im_sync), np.array(im_tcspc), np.array(im_chan), np.array(im_line), np.array(im_col), np.array(im_frame)
+       
     
-    return fast_flim
