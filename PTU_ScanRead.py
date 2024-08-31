@@ -570,8 +570,7 @@ def mHist3(x, y, z, xv=None, yv=None, zv=None):
 
     return h, xv, yv, zv
 
-
-    
+   
 def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
     # cnum is an additional input to separate the photons while calculating 
     photons = int(1e7) # number of photons to read at a time. Can be adjusted based on the system memory
@@ -1222,14 +1221,15 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                         chanf = chan[idx]
                         
                         # y = np.delete(y, ind)
-                        y = np.delete(y,idx)
-                        tmpx = np.delete(tmpx,idx)
-                        chan = np.delete(chan,idx)
-                        markers = np.delete(markers,idx)
-                        # tmpx = np.delete(tmpx, ind)
-                        # chan = np.delete(chan, ind)
-                        # markers = np.delete(markers, ind)
-                        
+                        y = y[~ind]
+                        tmpx = tmpx[~ind]
+                        chan = chan[~ind]
+                        markers = markers[~ind]
+                        # y = np.delete(y,idx)
+                        # tmpx = np.delete(tmpx,idx)
+                        # chan = np.delete(chan,idx)
+                        # markers = np.delete(markers,idx)
+                      
                         Turns2f = Turns2[Turns2<Framechange[k]]
                         Turns1f = Turns1[Turns1<Framechange[k]]
                         Turns2 = np.delete(Turns2,Turns2<Framechange[k])
@@ -1348,11 +1348,11 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                  t1 = Turns1f[0]
                                  t2 = Turns2f[0]
                                  
-                                 ind = (yf < t1)
-                                 yf = yf[~ind]
-                                 tmpxf = tmpxf[~ind]
-                                 chanf = chanf[~ind]
-                                 markersf = markersf[~ind]
+                                 # ind = (yf < t1)
+                                 # yf = yf[~ind]
+                                 # tmpxf = tmpxf[~ind]
+                                 # chanf = chanf[~ind]
+                                 # markersf = markersf[~ind]
                                  
                                  ind = (yf >= t1) & (yf <= t2)
                                  
