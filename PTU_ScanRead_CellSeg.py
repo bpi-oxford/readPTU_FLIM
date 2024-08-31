@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """
+Created on Sat Aug 31 01:02:46 2024
+
+@author: narai
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Created on Fri Aug 23 16:46:33 2024
 
 @author: narai
