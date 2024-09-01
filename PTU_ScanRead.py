@@ -12,6 +12,7 @@ import sys
 import time
 import pickle
 
+
 #%%
 
 
@@ -427,9 +428,9 @@ class PTUreader():
        """Get a chunk of photon data from start_idx to end_idx."""
        return self._ptu_read_raw_data([start_idx, end_idx], head)
     
-def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1):
-    Resolution = max(head['MeasDesc_Resolution'] * 1e9, 0.256)  # resolution of 0.256 ns to calculate average lifetimes
-    chDiv = 1e-9 * Resolution / head['MeasDesc_Resolution']
+def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolution = 0.2):
+    Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
+    chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
     SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
     nx = head['ImgHdr_PixX']
     ny = head['ImgHdr_PixY']
@@ -455,7 +456,7 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1):
             # print(len(idx))
             tcspc_pix[:, :, :, ch*cnum + p] = mHist3(im_line[idx].astype(np.int64), 
                                         im_col[idx].astype(np.int64), 
-                                        (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*Ngate/cnum), 
+                                        (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv), 
                                         np.arange(nx), 
                                         np.arange(ny), 
                                         np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
@@ -569,6 +570,114 @@ def mHist3(x, y, z, xv=None, yv=None, zv=None):
     h = h.reshape((len(xv), len(yv), len(zv)), order='F')
 
     return h, xv, yv, zv
+
+def mHist4(x, y, z, t, xv=None, yv=None, zv=None, tv=None):
+    # Convert inputs to flattened arrays
+    x = np.asarray(x).ravel()
+    y = np.asarray(y).ravel()
+    z = np.asarray(z).ravel()
+    t = np.asarray(t).ravel()
+    
+    # Remove non-finite values
+    ind = ~np.isfinite(x) | ~np.isfinite(y) | ~np.isfinite(z) | ~np.isfinite(t)
+    x = x[~ind]
+    y = y[~ind]
+    z = z[~ind]
+    t = t[~ind]
+
+    # Set default grid sizes
+    if xv is None and yv is None and zv is None and tv is None:
+        NX, NY, NZ, NT = 100, 100, 100, 100
+    elif xv is not None and yv is None and zv is None and tv is None:
+        if len(xv) == 1:
+            NX = NY = NZ = NT = xv
+        else:
+            NX, NY, NZ, NT = xv[0], xv[1], xv[2], xv[3]
+    elif xv is not None and yv is not None and zv is not None and tv is None:
+        xmin, xmax = np.min(x), np.max(x)
+        ymin, ymax = np.min(y), np.max(y)
+        zmin, zmax = np.min(z), np.max(z)
+        tmin, tmax = np.min(t), np.max(t)
+        dx, dy, dz, dt = (xmax - xmin) / NX, (ymax - ymin) / NY, (zmax - zmin) / NZ, (tmax - tmin) / NT
+
+        xv = np.linspace(xmin, xmax, NX)
+        yv = np.linspace(ymin, ymax, NY)
+        zv = np.linspace(zmin, zmax, NZ)
+        tv = np.linspace(tmin, tmax, NT)
+
+        x = np.floor((x - xmin) / dx).astype(int)
+        y = np.floor((y - ymin) / dy).astype(int)
+        z = np.floor((z - zmin) / dz).astype(int)
+        t = np.floor((t - tmin) / dt).astype(int)
+
+        xmax = np.round((xmax - xmin) / dx).astype(int)
+        ymax = np.round((ymax - ymin) / dy).astype(int)
+        zmax = np.round((zmax - zmin) / dz).astype(int)
+        tmax = np.round((tmax - tmin) / dt).astype(int)
+
+    else:
+        xmin, xmax = xv[0], xv[-1]
+        ymin, ymax = yv[0], yv[-1]
+        zmin, zmax = zv[0], zv[-1]
+        tmin, tmax = tv[0], tv[-1]
+
+        # Clipping values to ensure they are within the bounds
+        x = np.clip(x, xmin, xmax)
+        y = np.clip(y, ymin, ymax)
+        z = np.clip(z, zmin, zmax)
+        t = np.clip(t, tmin, tmax)
+
+        # Handling for x
+        if np.sum(np.diff(np.diff(xv))) == 0:
+            dx = xv[1] - xv[0]
+            x = np.int64(np.floor((x - xmin) / dx + 0.5))
+            xmax = np.int64(np.floor((xmax - xmin) / dx + 0.5)) + 1
+        else:
+            x = np.round(np.interp(x, xv, np.arange(len(xv)))).astype(int)
+            xmax = np.round(np.interp(xmax, xv, np.arange(len(xv)))).astype(int)
+        
+        # Handling for y
+        if np.sum(np.diff(np.diff(yv))) == 0:
+            dy = yv[1] - yv[0]
+            y = np.int64(np.floor((y - ymin) / dy + 0.5))
+            ymax = np.int64(np.floor((ymax - ymin) / dy + 0.5)) + 1
+        else:
+            y = np.round(np.interp(y, yv, np.arange(len(yv)))).astype(int)
+            ymax = np.round(np.interp(ymax, yv, np.arange(len(yv)))).astype(int)
+        
+        # Handling for z
+        if np.sum(np.diff(np.diff(zv))) == 0:
+            dz = zv[1] - zv[0]
+            z = np.int64(np.floor((z - zmin) / dz + 0.5))
+            zmax = np.int64(np.floor((zmax - zmin) / dz + 0.5)) + 1
+        else:
+            z = np.round(np.interp(z, zv, np.arange(len(zv)))).astype(int)
+            zmax = np.round(np.interp(zmax, zv, np.arange(len(zv)))).astype(int)
+        
+        # Handling for t
+        if np.sum(np.diff(np.diff(tv))) == 0:
+            dt = tv[1] - tv[0]
+            t = np.int64(np.floor((t - tmin) / dt + 0.5))
+            tmax = np.int64(np.floor((tmax - tmin) / dt + 0.5)) + 1
+        else:
+            t = np.round(np.interp(t, tv, np.arange(len(tv)))).astype(int)
+            tmax = np.round(np.interp(tmax, tv, np.arange(len(tv)))).astype(int)
+
+    # Initialize the histogram array
+    h = np.zeros(len(xv) * len(yv) * len(zv) * len(tv), dtype=int)
+    num = np.sort(x + xmax * y + xmax * ymax * z + xmax * ymax * zmax * t)
+    np.add.at(h, num, 1)
+    
+    tmp = np.diff((np.diff(np.concatenate(([-1], num, [-1]))) == 0).astype(int))
+
+    ind = np.arange(len(num))
+    h[num[tmp == 1]] += -ind[tmp == 1] + ind[tmp == -1]
+    
+    # Reshape the histogram to 4D
+    h = h.reshape((len(xv), len(yv), len(zv), len(tv)), order='F')
+
+    return h, xv, yv, zv, tv
+
 
    
 def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
@@ -1128,8 +1237,8 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
             tot_time = head['TTResult_StopAfter']*10^-3
             nz = np.ceil(tot_time/tim_p_frame)
         
-        if 'PIEnumPIEWindows' in head:
-            cnum = head['PIEnumPIEWindows'] # number of PIE cycles - this effects the tcspc channels
+        if 'PIENumPIEWindows' in head:
+            cnum = head['PIENumPIEWindows'] # number of PIE cycles - this effects the tcspc channels
         anzch = 32  # max number of channels (can be 64 now for the new MultiHarp)
         # Resolution = max([1e9 * head['MeasDesc_Resolution'], 0.064])
         Resolution = 1e9*head['MeasDesc_Resolution']
