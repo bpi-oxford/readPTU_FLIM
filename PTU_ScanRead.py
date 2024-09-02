@@ -431,7 +431,7 @@ class PTUreader():
 def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolution = 0.2):
     Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
     chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
-    SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
+    # SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
     nx = head['ImgHdr_PixX']
     ny = head['ImgHdr_PixY']
     dind = np.unique(im_chan).astype(np.int64)
@@ -440,7 +440,7 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolut
     maxch_n = len(dind)
 
     tcspc_pix = np.zeros((nx, ny, Ngate, maxch_n*cnum), dtype=np.uint32) # X-Y-Tau-CH*Pulse
-    timeF = [None] * maxch_n*cnum
+    # timeF = [None] * maxch_n*cnum
     tag = np.zeros((nx, ny, maxch_n, cnum), dtype=np.uint32) #XYCP
     tau = np.zeros((nx, ny, maxch_n, cnum))
 
@@ -465,9 +465,9 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolut
             tag[:, :, ch, p] = np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2)
             tau[:, :, ch, p] = np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (tag[:, :, ch, p] + 10**-10)) -
                                             (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (tag[:, :, ch, p] + 10**-10)) ** 2))
-            timeF[ch*cnum + p] = np.round(im_sync[idx] / SyncRate / Resolution / 1e-9) + im_tcspc[idx].astype(np.int64)  # in tcspc bins 
+            # timeF[:,ch*cnum + p] = np.round(im_sync[idx] / SyncRate / Resolution / 1e-9) + im_tcspc[idx].astype(np.int64)  # in tcspc bins 
             
-    return tag, tau, tcspc_pix, timeF
+    return tag, tau, tcspc_pix
 
 def mHist2(x, y, xv=None, yv=None):
     x = np.asarray(x).ravel()
@@ -886,7 +886,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
             im_col.extend(np.floor(nx * (y[ind] - t1) / (t2 - t1))) # Python compatible, pixel starts from zero
             dt[line]  = t2-t1;
             
-            tag, tau, tcspc_pix = Process_Frame(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum)[0:2]
+            tag, tau, tcspc_pix = Process_Frame(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum)
             
             line = line +1;    
             head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
@@ -1015,7 +1015,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                 line += 1
                 cwaitbar(line,ny,message = "Lines Processed")
 
-            tag, tau, tcspc_pix = Process_Frame(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum)[0:2]
+            tag, tau, tcspc_pix = Process_Frame(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum)
              
             head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
             head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']
@@ -1230,7 +1230,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         for frame in range(np.max(im_frame)):
             [tmptag, tmptau] = Process_Frame(im_sync[im_frame == frame],im_col[im_frame == frame],\
                                              im_line[im_frame == frame],im_chan[im_frame == frame],\
-                                                 im_tcspc[im_frame == frame],head, cnum)
+                                                 im_tcspc[im_frame == frame],head, cnum)[0:1]
             if tmptag.size > 0:
                 tag[:,:,:,frame, cnum] = tmptag
                 tau[:,:,:,frame, cnum] = tmptau
@@ -1450,7 +1450,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                 Turns2f = Turns2f[1:]
                                 # cwaitbar(line,ny,message = "Lines Processed")
                         idx = np.where(im_frame == frame)[0]
-                        tmptag, tmptau,_,_ = Process_Frame(im_sync[idx],im_col[idx],\
+                        tmptag, tmptau,_ = Process_Frame(im_sync[idx],im_col[idx],\
                                                          im_line[idx],im_chan[idx],\
                                                              im_tcspc[idx], head, cnum)
                         if tmptag.size > 0:
@@ -1580,7 +1580,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                          tmptag, tmptau = Process_Frame(im_sync[im_frame == frame], \
                                                         im_col[im_frame == frame], im_line[im_frame == frame], \
                                                             im_chan[im_frame == frame], im_tcspc[im_frame == frame], \
-                                                                head, cnum)
+                                                                head, cnum)[0:1]
                          if tmptag.size > 0:
                              tag[:, :, :, frame, cnum] = tmptag
                              tau[:, :, :, frame, cnum] = tmptau
@@ -1637,7 +1637,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
             
              tmptag, tmptau = Process_Frame(im_sync[im_frame == frame], im_col[im_frame == frame],\
                                             im_line[im_frame == frame], im_chan[im_frame == frame],\
-                                                im_tcspc[im_frame == frame], head, cnum)
+                                                im_tcspc[im_frame == frame], head, cnum)[0:1]
              if frame <= nz and tmptag.size > 0:
                  tag[:, :, :, frame, cnum] = tmptag
                  tau[:, :, :, frame, cnum] = tmptau
