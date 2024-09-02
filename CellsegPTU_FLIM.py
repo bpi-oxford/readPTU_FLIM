@@ -10,12 +10,13 @@ from plantseg.predictions.functional.predictions import unet_predictions
 from sklearn.model_selection import ParameterGrid
 from tqdm import tqdm
 from plantseg.segmentation.functional.segmentation import mutex_ws
-from PTU_ScanRead import PTU_ScanRead, Process_Frame, mHist3, mHist4
+from PTU_ScanRead import PTU_ScanRead, Process_Frame, mHist2
 
 #%%
 
 filename = r'D:\Collabs\fromYuexuan\Yuexuan_ptu_testfile.ptu'
 cnum = 1 # by default
+max_cell_Area = 5000 # in pixels
 
 head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame = PTU_ScanRead(filename)
 dind = np.unique(im_chan) # unique detector channels
@@ -25,7 +26,8 @@ if 'PIENumPIEWindows' in head:
 
 mem_PIE = 2 # laser pulse for membrane channel
 mem_det = 2 # detector id for membrane channel
-
+auto_PIE = 1 # laser pulse for autofluorescence channel
+auto_det = 1 # detector id for autofluorescence channel
 
 param_grid = {
     "beta": [ round(x,1) for x in np.arange(0.5,0.95,0.05)],
@@ -70,10 +72,37 @@ for nz in range(nFrames):
             })
         
         tmp = [np.unique(d['mask'], return_counts=True) for d in res]
-        ncells = [len(np.unique(d['mask'])) for d in res] # number of cells detected for each parameter
+        ncells = [len(unique) for unique, counts in tmp] # number of cells detected for each parameter
         idx = np.argmax(ncells) # gives the first position of maximum cells detected
+        beta = res[idx]['beta']
+        post_mini_size = res[idx]['post_mini_size']
+        CellId, CellArea = tmp[idx]
+        cidx = CellArea<max_cell_Area
+        CellId = CellId[cidx]
+        CellArea = CellArea[cidx]
+        Cnum = np.argsort(CellId)
+        maskt = res[idx]["mask"][0]
+        mask = 0*maskt
+        for j in range(len(Cnum)):
+            mask[maskt == CellId[Cnum[j]]] = j
         
+        im_mask = mask[im_line, im_col] # this is now a vector that assigns a mask value to each photon dependin on its im_col and im_line
+        tmpCh = np.ceil(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution']) # total number of channels in the original tcspc histogram
         
+        ind = (im_chan == dind[auto_det-1]) & (im_tcspc<tmpCh/cnum*auto_PIE) & (im_tcspc>=((auto_PIE-1))*tmpCh/cnum)
+        idx = np.where(ind)[0]
+        Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
+        chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
+        SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
+        Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * (head['MeasDesc_Resolution'] / Resolution / cnum) * 1e9)
+        # tcspc_cell =  np.zeros((len(Cnum), Ngate), dtype=np.uint32)
+        # print(len(idx))
+        tcspc_cell = mHist2(im_mask[idx].astype(np.int64), 
+                                    (im_tcspc[idx] / chDiv).astype(np.int64) - int((auto_PIE-1)*tmpCh/cnum/chDiv), 
+                                    np.arange(len(Cnum)), 
+                                    np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
+    
+    
         
         fig, axs = plt.subplots(1,4,figsize=(20,10))
         axs = axs.ravel()

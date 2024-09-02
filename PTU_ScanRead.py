@@ -469,6 +469,80 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolut
             
     return tag, tau, tcspc_pix, timeF
 
+def mHist2(x, y, xv=None, yv=None):
+    x = np.asarray(x).ravel()
+    y = np.asarray(y).ravel()
+
+    ind = ~np.isfinite(x) | ~np.isfinite(y)
+    x = x[~ind]
+    y = y[~ind]
+
+    if xv is not None and yv is None:
+        if len(xv) == 1:
+            NX = xv
+            NY = xv
+        else:
+            NX = xv[0]
+            NY = xv[1]
+    elif xv is None and yv is None:
+         NX, NY = 100, 100
+            
+    if xv is not None and yv is None:
+        xmin, xmax = np.min(x), np.max(x)
+        ymin, ymax = np.min(y), np.max(y)
+        dx, dy = (xmax - xmin) / NX, (ymax - ymin) / NY
+
+        xv = np.linspace(xmin, xmax, NX)
+        yv = np.linspace(ymin, ymax, NY)
+
+        x = np.floor((x - xmin) / dx).astype(int)
+        y = np.floor((y - ymin) / dy).astype(int)
+
+        xmax = np.round((xmax-xmin)/dx).astype(int)
+        ymax = np.round((ymax-ymin)/dy).astype(int)
+
+    else:
+        xmin, xmax = xv[0], xv[-1]
+        ymin, ymax = yv[0], yv[-1]
+
+        # clipping
+        x = np.clip(x, xmin, xmax)
+        y = np.clip(y, ymin, ymax)
+
+        # Handling for x
+        if (np.sum(np.diff(np.diff(xv))) == 0):
+            dx = xv[1] - xv[0]
+            x = np.int64(np.floor((x-xmin)/dx + 0.5))
+            xmax =  np.int64(np.floor((xmax-xmin)/dx + 0.5))+1
+        else:
+            x = np.round(np.interp(x, xv, np.arange(len(xv)))).astype(int)
+            xmax = np.round(np.interp(xmax, xv, np.arange(len(xv)))).astype(int)
+            
+        # Handling for y
+        if np.sum(np.diff(np.diff(yv))) == 0:
+            dy = yv[1] - yv[0]
+            y = np.int64(np.floor((y-ymin)/dy + 0.5))
+            ymax =  np.int64(np.floor((ymax-ymin)/dy + 0.5))+1
+        else:
+            y = np.round(np.interp(y, yv, np.arange(len(yv)))).astype(int)
+            ymax = np.round(np.interp(ymax, yv, np.arange(len(yv)))).astype(int)
+
+    # Initialize the histogram array
+    h = np.zeros(len(xv) * len(yv), dtype=int)
+    num = np.sort(x + xmax * y)
+    np.add.at(h, num, 1)
+    
+    tmp = np.diff((np.diff(np.concatenate(([-1], num, [-1]))) == 0).astype(int))
+
+    ind = np.arange(len(num))
+    # Calculate the flattened indices for the histogram
+    h[num[tmp == 1]] += -ind[tmp == 1] + ind[tmp == -1]
+    
+    # Increment the histogram at the calculated indices
+    h = h.reshape((len(xv), len(yv)), order='F')
+
+    return h, xv, yv
+
 def mHist3(x, y, z, xv=None, yv=None, zv=None):
     # x = np.asarray(x).flatten()
     # y = np.asarray(y).flatten()
