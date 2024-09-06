@@ -13,6 +13,7 @@ from tqdm import tqdm
 from plantseg.segmentation.functional.segmentation import mutex_ws
 from PTU_ScanRead import PTU_ScanRead, Process_Frame, mHist2
 import glob
+from FLIM_fitter import Calc_mIRF
 #%%
 
 filename = r'D:\Collabs\fromYuexuan\Yuexuan_ptu_testfile.ptu'
@@ -127,7 +128,8 @@ for nz in range(nFrames):
                                     np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
         
         
-
+        tcspcIRF = Calc_mIRF(head, np.sum(tcspc_cell,axis=0)[np.newaxis,:,np.newaxis]);
+        
         fig, axs = plt.subplots(1,4,figsize=(20,10))
         axs = axs.ravel()
         fig.suptitle(res[idx]["name"])

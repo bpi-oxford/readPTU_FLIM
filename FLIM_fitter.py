@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import nnls , lsq_linear
 from scipy.optimize import minimize as minimize_s
+from scipy.linalg import lstsq
 # from lmfit import minimize, Parameters #,report_fit, fit_report, report_errors,
 
 #%%
@@ -53,7 +54,7 @@ def Convol(irf, x):
     
     return y.squeeze()
 
-def IRF_Fun(p,t,pic=None):
+def IRF_Fun(p,t,pic = None):
     """
     Computes the following model IRF:
     IRF(t_0, w, a, dt, T1, T2, t) = 
@@ -109,7 +110,7 @@ def IRF_Fun(p,t,pic=None):
         H * (np.exp(-t2 / T1) * (1 - np.exp(-t2 / T2)))
     ])
 
-    IRF = np.ones((len(t), 1)) * np.array([1, b, a]) * IRF.T / np.ones((len(t), 1)) @ np.sum(IRF, axis=1, keepdims=True).T
+    IRF = (np.ones((len(t), 1)) * np.array([1, b, a]) * IRF.T) / (np.ones((len(t), 1)) @ (np.sum(IRF, axis=1, keepdims=True).T))
 
     tm = 0.5 * np.max(IRF[:, 0])
 
@@ -117,16 +118,16 @@ def IRF_Fun(p,t,pic=None):
     IRF[IRF[:, 2] > tm, 2] = tm
 
     IRF[np.isnan(IRF)] = 0
-    IRF = np.sum(IRF, axis=1) / np.sum(np.sum(IRF))
+    IRF = (np.sum(IRF, axis=1) / np.sum(np.sum(IRF)))[:,np.newaxis]
     IRF[IRF < 0] = 0
 
-    tmp, t0 = np.max(IRF), np.argmax(IRF)
+    t0 = np.argmax(IRF)
     tmp = IRF[:t0]
     tmp = np.diff(tmp)
     tmp[tmp < 0] = 0
     tmp = np.concatenate(([0], np.cumsum(tmp)))
     IRF[:t0] = tmp
-    z = np.sum(IRF) / np.sum(np.sum(IRF))
+    z = np.sum(IRF,axis=1) / np.sum(np.sum(IRF))
 
     if pic is not None:
         if pic == 1:
@@ -179,15 +180,15 @@ def TCSPC_Fun(p, t, y=None, para=None):
         t = np.array(y).flatten()
         
         nex = len(p) - 7
-        tau = p[7:]
+        tauT = p[7:]
         
         IRF = IRF_Fun(p[:7], t)
         
         zz = np.zeros((len(t), nex + 1))
-        zz[:, 0] = np.ones_like(t)
+        zz[:, 0] = 1
         
         for i in range(nex):
-            tmp = Convol(IRF, np.exp(- (t - p[0]) / tau[i]) / tau[i])
+            tmp = Convol(IRF, np.exp(- (t - p[0]) / tauT[i]) / tauT[i])
             zz[:, i+1] = tmp[:len(t)]
         
         err = np.zeros((len(t), c.shape[1]))
@@ -208,28 +209,45 @@ def TCSPC_Fun(p, t, y=None, para=None):
         y = y[valid_idx, :]
         
         nex = len(p) - 7
-        
         IRF = IRF_Fun(p[:7], t)
-        tau = p[7:]
+        tauT = p[7:]
         t1 = t - p[0]
         
         zz = np.zeros((len(t), nex + 1))
-        zz[:, 0] = np.ones_like(t)
+
+        zz[:, 0] = 1
         
         for i in range(nex):
-            tmp = Convol(IRF, np.exp(- t1 / tau[i]) / tau[i])
+            tmp = Convol(IRF, np.exp(- t1 / tauT[i]) / tauT[i])
+            # print( tmp.shape)
             zz[:, i+1] = tmp[:len(t)]
         
         c = np.zeros((zz.shape[1], n))
         z = np.zeros_like(y)
         
+        # if np.isnan(np.sum(zz)) or np.isinf(np.sum(zz)):
+            # print('nan / inf detected in IRF')
         for j in range(n):
             # res = lsq_linear(zz, y[:, j], bounds=(0, np.inf))
             # c[:, j] = res.x
-            c[:, j], _ = nnls(zz, y[:, j])
-            z[:, j] = zz @ c[:, j]
+            try:
+                if not (np.isnan(np.sum(zz)) or np.isnan(np.sum(y[:,j]))):
+                    c[:, j],_ = nnls(zz, y[:, j])
+                    z[:, j] = zz @ c[:, j]
+                else:
+                    c[:,j] = 0
+                    z[:, j] = 0
+            except:
+                print("fitting error: ",j)
+                c[:,j] = 0
+                z[:, j] = 0
+                    
         
-        err = np.sum(np.sum((y - z) ** 2 / (10 + np.abs(z))))
+        # err = np.sum(np.sum((y - z) ** 2 / (10^-3 + np.abs(z))))
+        # if np.isnan(err):
+        #     err = 10^200
+        err = np.sum((y-z)**2)  
+        # print(err)
     
     return err, c, zz, z
 
@@ -249,15 +267,17 @@ def Calc_mIRF(head, tcspc):
             Calculated mIRF array.
     """
 
-    maxres = np.max(head['Resolution'])
-    Resolution = max([maxres, 0.032])
+    np.seterr(divide='ignore', over='ignore', invalid='ignore')
+    
+    maxres = np.max(head['MeasDesc_Resolution']*1e9)
+    Resolution = max([maxres, 0.1])
     # Pulse = 1e9 / head['SyncRate']
 
-    tau = Resolution * (np.arange(1, tcspc.shape[1] + 1) - 0.5)
-    IRF = np.zeros_like(tcspc)
+    tau = Resolution * (np.arange(tcspc.shape[1] ) + 0.5)
+    IRF = np.zeros(tcspc.shape)
     nex = 2
 
-    _, t0_idx = np.max(tcspc, axis=1), np.argmax(tcspc, axis=1)
+    t0_idx = np.argmax(tcspc, axis=1)
     t0 = tau[min(t0_idx.min(), len(tau) - 1)]
 
     w1 = 0.03**2
@@ -270,7 +290,7 @@ def Calc_mIRF(head, tcspc):
     for PIE in range(tcspc.shape[2]):
 
         p = np.array([t0, w1, T1, T2, a, b, dt, 1, 2])
-        pl = np.array([t0 - 2.5, 1e-3, 1e-4, 1e-4, 1e-5, 1e-5, -0.3] + [0] * nex)
+        pl = np.array([t0 - 2.5, 1e-3, 1e-4, 1e-4, 1e-5, 1e-5, -0.3] + [0.1] * nex)
         pu = np.array([t0 + 2.5, 1, 1, 1, 0.01, 0.5, 0.5] + [10] * nex)
 
         tc = np.sum(tcspc[:, :, PIE], axis=1)
@@ -278,57 +298,195 @@ def Calc_mIRF(head, tcspc):
 
         ch = 0
         ind = ord[ch]
-        y = tcspc[ind, :, PIE]
+        y = tcspc[ind, :, PIE][:,np.newaxis]
 
         err = np.zeros(10)
 
         p_array = np.zeros((len(p), 10))
 
         for casc in range(10):
-            s = err.argmin()
-            r0 = p_array[:, s]
+            if casc==0:
+                r0 = p
+            else:
+                s = err.argmin()
+                r0 = p_array[:, s]
+                
             for sub in range(10):
-                rf = r0 * (2 ** (1.1 * (np.random.rand(len(r0)) - 0.5) / casc))
+                rf = r0 * (2 ** (1.1 * (np.random.rand(len(r0)) - 0.5) / (casc+1)))
                 rf = np.clip(rf, pl, pu)
-                res = minimize_s(lambda x: TCSPC_Fun(x, tau, y), rf, bounds=list(zip(pl, pu)))
+                res = minimize_s(lambda x: TCSPC_Fun(x, tau, y.astype(np.float64))[0], rf, bounds=list(zip(pl, pu)))
                 p_array[:, sub] = res.x
-                err[sub] = TCSPC_Fun(p_array[:, sub], tau, y)
+                err[sub] = TCSPC_Fun(p_array[:, sub], tau, y.astype(np.float64))[0]
 
         err1 = err.min()
-        p1 = np.mean(p[:, err == err1], axis=1)
-        _, c1, _, tmp1 = TCSPC_Fun(p1, tau, y)
+        p1 = np.mean(p_array[:, err == err1], axis=1)
+        _, c1, _, tmp1 = TCSPC_Fun(p1, tau, y.astype(np.float64))
 
         IRF[ind, :, PIE] = IRF_Fun(p1[:7], tau)
 
         para = p1[1:7]
         p = np.concatenate([[p1[0]], p1[7:]])
-        pl = np.array([0] + [0] * nex)
+        pl = np.array([0] + [.1] * nex)
         pu = np.array([3] + [10] * nex)
 
-        for ch in range(1, tcspc.shape[0]):
+        for ch in range(0, tcspc.shape[0]):
             ind = ord[ch]
-            y = tcspc[ind, :, PIE]
-
+            y = tcspc[ind, :, PIE][:,np.newaxis]
+            print(len(y))
             err = np.zeros(10)
             p_array = np.zeros((len(p), 10))
 
             for casc in range(10):
-                s = err.argmin()
-                r0 = p_array[:, s]
+                if casc==0:
+                    r0 = p
+                else:
+                    s = err.argmin()
+                    r0 = p_array[:, s]
                 for sub in range(10):
-                    rf = r0 * (2 ** (1.05 * (np.random.rand(len(r0)) - 0.5) / casc))
+                    rf = r0 * (2 ** (1.05 * (np.random.rand(len(r0)) - 0.5) / (casc+1)))
                     rf = np.clip(rf, pl, pu)
-                    res = minimize_s(lambda x: TCSPC_Fun(x, tau, y, para), rf, bounds=list(zip(pl, pu)))
+                    res = minimize_s(lambda x: TCSPC_Fun(x, tau, y.astype(np.float64), para)[0], rf, bounds=list(zip(pl, pu)))
                     p_array[:, sub] = res.x
-                    err[sub] = TCSPC_Fun(p_array[:, sub], tau, y, para)
+                    err[sub] = TCSPC_Fun(p_array[:, sub], tau, y.astype(np.float64), para)[0]
 
             err1 = err.min()
             p1 = np.mean(p_array[:, err == err1], axis=1)
-            _, c1, _, tmp1 = TCSPC_Fun(p1, tau, y, para)
+            _, c1, _, tmp1 = TCSPC_Fun(p1, tau, y.astype(np.float64), para)
 
 
             IRF[ind, :, PIE] = IRF_Fun(np.concatenate([[p1[0]], para, p1[1:]]), tau)
 
     IRF[IRF < 0] = 0
-
+    np.seterr(divide='warn', over='warn', invalid='warn')
+    
     return IRF
+
+
+
+
+def LSFit(param, y, irf, p, plt_flag = None):
+    """
+   LSFIT(param, irf, y, p) returns the Least-Squares deviation between the data y 
+   and the computed values.
+   
+   LSFIT assumes a function of the form:
+   
+       y = yoffset + A(1)*convol(irf,exp(-t/tau(1)/(1-exp(-p/tau(1)))) + ...
+   
+   param(1) is the color shift value between irf and y.
+   param(2) is the irf offset.
+   param(3:...) are the decay times.
+   
+   irf is the measured Instrumental Response Function.
+   y is the measured fluorescence decay curve.
+   p is the time between two laser excitations (in number of TCSPC channels).
+   
+   Args:
+   param : array
+       The parameters for the fit (color shift, irf offset, decay times)
+   irf : array
+       The measured Instrumental Response Function.
+   y : array
+       The measured fluorescence decay curve.
+   p : int
+       The time between two laser excitations (in number of TCSPC channels).
+   
+   Returns:
+   err : float
+       The least-squares deviation between the measured data and computed values.
+   """
+    n = len(irf)
+    t = np.arange(1, n+1)
+    tp = np.arange(1, p+1)
+    c = param[0]
+    tau = np.array(param[1:])
+    
+    # Matrix x calculation
+    x = np.exp(-(tp[:, None] - 1) * (1.0 / tau)) @ np.diag(1.0 / (1 - np.exp(-p / tau)))
+    irs = (1 - c + np.floor(c)) * irf[(t - np.int_(c) - 1) % n] + \
+         (c - np.floor(c)) * irf[(t - int(np.ceil(c)) - 1) % n]
+         
+    z = Convol(irs, x)
+    # Add column of ones to z for fitting
+    z = np.column_stack((np.ones(len(z)), z))
+    # Linear least squares solution for A
+    A, _, _, _ = lstsq(z, y)
+    # A,_ = nnls(z, y)
+    
+    # Generate fitted curve
+    z = z @ A
+    
+    if plt_flag is not None:
+        # plt.semilogy(t, irs / np.max(irs) * np.max(y), label="irs")
+        plt.semilogy(t, y, 'bo', label="y")
+        plt.semilogy(t, z, label="fitted z")
+        plt.legend()
+        plt.draw()
+        plt.pause(0.001)
+        
+        
+    # Error calculation (Least-squares deviation)
+    err = np.sum((z - y) ** 2 / np.abs(z)) / (n - len(tau))
+    
+    return err
+
+def FluoFit(irf, y, p, dt, tau, lim = None, init = None):
+    """
+    The function FLUOFIT performs a fit of a multi-exponential decay curve.
+    The function arguments are:
+    irf 	= 	Instrumental Response Function
+    y 	= 	Fluorescence decay data
+    p 	= 	Time between laser exciation pulses (in nanoseconds)
+    dt 	= 	Time width of one TCSPC channel (in nanoseconds)
+    tau 	= 	Initial guess times
+    lim   = 	limits for the lifetimes guess times
+    init	=	Whether to use a initial guess routine or not  (not implemented yet!!!)
+
+    The return parameters are:
+    c 	=	Color Shift (time shift of the IRF with respect to the fluorescence curve)
+    offset	=	Offset
+    A	    =   Amplitudes of the different decay components
+    tau	=	Decay times of the different decay components
+    dc	=	Color shift error
+    doffset	= 	Offset error
+    dtau	=	Decay times error
+    irs	=	IRF, shifted by the value of the colorshift
+    zz	    Fitted fluorecence component curves
+    t     =   time axis
+    chi   =   chi2 value
+    """
+
+    irf = np.array(irf).flatten()
+    offset = 0;
+    y = np.array(y).flatten()
+    n = len(irf); 
+    c = 0 # this will change if colorshift correction is necessary
+    m = len(tau)
+    
+    if lim is None:
+        lim_min =  np.array([0.01] * m)
+        lim_max =  np.array([100.0] * m)
+    else:
+        lim_min = lim[:m]
+        lim_max = lim[m:]
+    
+    lim_min /= dt
+    lim_max /= dt    
+    p /= dt
+    tp = np.arange(p).reshape(-1) # time axis
+    t = np.arange(1,n+1)
+    tau /= dt
+    
+    param = np.concatenate(([c], tau)) 
+    # ecay times and Offset are assumed to be positive.
+    paramin = np.concatenate(([-1/dt], lim_min))
+    paramax =np.concatenate(([1/dt], lim_max))
+    res = minimize_s(lambda x: LSFit(x, y.astype(np.float64), irf, np.floor(p + 0.5)), param, bounds=list(zip(paramin, paramax)))
+    
+    # x = np.exp(-(tp[:, None] - 1) * (1.0 / tau)) @ np.diag(1.0 / (1 - np.exp(-p / tau)))
+    # irs = (1 - c + np.floor(c)) * irf[(t - np.floor(c) - 1) % n] + \
+         # (c - np.floor(c)) * irf[(t - np.ceil(c) - 1) % n]
+    
+        
+    
+    
