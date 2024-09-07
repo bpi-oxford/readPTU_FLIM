@@ -362,7 +362,103 @@ def Calc_mIRF(head, tcspc):
     return IRF
 
 
+def PIRLSnonneg(x, y, max_num_iter=10):
+    """
+    Poisson Iterative Reweighted Least Squares (PIRLS) for non-negative beta.
+    
+    Solves X * beta = Y for Poisson-distributed data Y with non-negative beta.
+    
+    Parameters:
+    x : array_like
+        Predictors matrix (independent variables).
+    y : array_like
+        Response vector (dependent variable, Poisson-distributed).
+    max_num_iter : int, optional
+        Maximum number of iterations. Default is 10.
+    
+    Returns:
+    beta : ndarray
+        Solution vector.
+    k : int
+        Actual number of iterations used.
+    """
+    
+    n = len(y)
+    TINY = 0.1 / n  # Small regularization value
+    w = np.zeros((n, n))
+    
+    # Initial guess using non-negative least squares
+    beta_last = lsq_linear(x, y, bounds=(0, np.inf)).x
+    
+    for k in range(max_num_iter):
+        # Update the weight matrix
+        w[np.diag_indices_from(w)] = 1. / np.maximum(x @ beta_last, TINY)
+        
+        # Update beta using weighted least squares
+        xt_w = x.T @ w
+        beta = lsq_linear(xt_w @ x, xt_w @ y, bounds=(0, np.inf)).x
+        
+        # Check for convergence
+        delta = beta - beta_last
+        if np.sum(delta ** 2) < 1e-10:
+            break
+        
+        beta_last = beta
+    
+    return beta, k
 
+def MLFit(param, y, irf, p, plt_flag = None):
+    """
+    Computes the Maximum Likelihood (ML) error between the data y and the computed values.
+    
+    Parameters:
+    param : array_like
+        Parameters where:
+        param[0] is the color shift between irf and y,
+        param[1] is the irf offset,
+        param[2:] are the decay times (tau).
+    irf : array_like
+        Measured Instrumental Response Function (IRF).
+    y : array_like
+        Measured fluorescence decay curve.
+    p : int
+        Time between laser excitations (in TCSPC channels).
+
+    Returns:
+    err : float
+        Maximum Likelihood error.
+    """
+    
+    n = len(irf)
+    t = np.arange(1, n+1)
+    tp = np.arange(1, p+1)
+    c = param[0]
+    tau = np.array(param[1:])
+    
+    # Matrix x calculation
+    x = np.exp(-(tp[:, None] - 1) * (1.0 / tau)) @ np.diag(1.0 / (1 - np.exp(-p / tau)))
+    irs = (1 - c + np.floor(c)) * irf[(t - np.int_(c) - 1) % n] + \
+         (c - np.floor(c)) * irf[(t - int(np.ceil(c)) - 1) % n]
+    
+    # Perform the convolution using the Convol function
+    z = Convol(irs, x)
+    
+    # Add a constant term
+    # z = np.hstack([np.ones((z.shape[0], 1)), z])
+    z = np.column_stack((np.ones(len(z)), z))
+   
+    # Perform non-negative least squares to fit A
+    # A = lsq_linear(z, y, bounds=(0, np.inf)).x
+    A,_ = PIRLSnonneg(z,y, 10) 
+    
+    # Recompute z using the estimated coefficients A
+    z = z @ A
+    
+    # Calculate the error using Maximum Likelihood approach
+    ind = y > 0
+    err = np.sum(y[ind] * np.log(y[ind] / z[ind]) - y[ind] + z[ind]) / (n - len(tau))
+    
+    return err
 
 def LSFit(param, y, irf, p, plt_flag = None):
     """
@@ -410,9 +506,10 @@ def LSFit(param, y, irf, p, plt_flag = None):
     # Add column of ones to z for fitting
     z = np.column_stack((np.ones(len(z)), z))
     # Linear least squares solution for A
-    A, _, _, _ = lstsq(z, y)
+    # A, _, _, _ = lstsq(z, y)
     # A,_ = nnls(z, y)
-    
+    A,_ = PIRLSnonneg(z,y,10)
+    # print(A.shape)
     # Generate fitted curve
     z = z @ A
     
@@ -426,11 +523,12 @@ def LSFit(param, y, irf, p, plt_flag = None):
         
         
     # Error calculation (Least-squares deviation)
-    err = np.sum((z - y) ** 2 / np.abs(z)) / (n - len(tau))
+    TINY = 10**-10
+    err = np.sum((z+TINY - y) ** 2 / np.abs(z+TINY)) / (n - len(tau))
     
     return err
 
-def FluoFit(irf, y, p, dt, tau, lim = None, init = None):
+def FluoFit(irf, y, p, dt, tau, lim = None, init = None, flag_ml = True, plt_flag = 1):
     """
     The function FLUOFIT performs a fit of a multi-exponential decay curve.
     The function arguments are:
@@ -473,7 +571,7 @@ def FluoFit(irf, y, p, dt, tau, lim = None, init = None):
     lim_min /= dt
     lim_max /= dt    
     p /= dt
-    tp = np.arange(p).reshape(-1) # time axis
+    tp = np.arange(1,p+1) # time axis
     t = np.arange(1,n+1)
     tau /= dt
     
@@ -481,11 +579,45 @@ def FluoFit(irf, y, p, dt, tau, lim = None, init = None):
     # ecay times and Offset are assumed to be positive.
     paramin = np.concatenate(([-1/dt], lim_min))
     paramax =np.concatenate(([1/dt], lim_max))
-    res = minimize_s(lambda x: LSFit(x, y.astype(np.float64), irf, np.floor(p + 0.5)), param, bounds=list(zip(paramin, paramax)))
     
-    # x = np.exp(-(tp[:, None] - 1) * (1.0 / tau)) @ np.diag(1.0 / (1 - np.exp(-p / tau)))
-    # irs = (1 - c + np.floor(c)) * irf[(t - np.floor(c) - 1) % n] + \
-         # (c - np.floor(c)) * irf[(t - np.ceil(c) - 1) % n]
+    if flag_ml is True:
+        res = minimize_s(lambda x: MLFit(x, y.astype(np.float64), irf, np.floor(p + 0.5)), param, bounds=list(zip(paramin, paramax)))
+    else:    
+        res = minimize_s(lambda x: LSFit(x, y.astype(np.float64), irf, np.floor(p + 0.5)), param, bounds=list(zip(paramin, paramax)))
+    
+    
+    xfit = res.x
+    c = xfit[0]
+    tau = xfit[1:]
+    x = np.exp(-(tp[:, None] - 1) * (1.0 / tau)) @ np.diag(1.0 / (1 - np.exp(-p / tau)))
+    irs = (1 - c + np.floor(c)) * irf[(t - np.int_(c) - 1) % n] + \
+         (c - np.floor(c)) * irf[(t - int(np.ceil(c)) - 1) % n]
+         
+    z = Convol(irs, x);
+    z = np.column_stack((np.ones(len(z)), z))
+    # Linear least squares solution for A
+    # A, _, _, _ = lstsq(z, y) 
+    TINY = 10**-10
+    # A,_ = nnls(z, y)
+    A,_ = PIRLSnonneg(z,y,10)
+    zz = z*A;
+    z = z @ A      
+    if plt_flag is not None:
+        plt.semilogy(t, y, 'bo', label="y")
+        plt.semilogy(t, z, label="fitted z")
+        plt.legend()
+        plt.draw()
+        plt.pause(0.001)
+    chi = np.sum((y-z-TINY)**2/ np.abs(z+TINY))/(n-m);
+    t = dt*t;
+    tau1 = dt*tau
+    c = dt*c
+    offset = zz[0]
+    A = A[1:]    
+    
+    return tau1, A, c, z, zz, offset, irs, t, chi
+    # 
+    # 
     
         
     
