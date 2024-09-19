@@ -938,6 +938,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                         markers = np.delete(markers, ind)
 
                         ind = (y >= t1) & (y <= t2)
+                        idx = np.where(ind)[0]
 
                         im_sync.extend(y[ind])
                         im_tcspc.extend(tmpx[ind])
@@ -1076,6 +1077,8 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         LineStop = 2 ** (head['ImgHdr_LineStop'] - 1)
         Frame = 2 ** (head['ImgHdr_Frame'] - 1)
         
+        in_frame = True;
+
         if Frame<1:
             Frame = -1
             in_frame = True
@@ -1095,43 +1098,57 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
 
             cnt += num
             tmp_sync += tend
+            
+            y = np.concatenate((y, tmp_sync))  # Appending selected elements to y
+            tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc / chDiv) ))  # Appending selected elements to tmpx
+            chan = np.concatenate((chan, tmp_chan ))  # Appending selected elements to chan
+            marker = np.concatenate((marker, tmp_special))  # Appending selected elements to markers
 
-            y.extend(tmp_sync)
-            tmpx.extend(tmp_tcspc)
-            chan.extend(tmp_chan)
-            marker.extend(tmp_special)
+
+
+            # y.extend(tmp_sync)
+            # tmpx.extend(tmp_tcspc)
+            # chan.extend(tmp_chan)
+            # marker.extend(tmp_special)
             tend = y[-1] + loc
+            
+            F = y[(marker.astype(int) & Frame) >0] # Frame changes
 
-            F = [val for val in y if val & Frame > 0]
+            # F = [val for val in y if val and Frame > 0]
             while F:
 
                 if F:
-                    ind = [i for i, val in enumerate(y) if val < F[0]]
-                    f_y = [y[i] for i in ind]
-                    f_x = [tmpx[i] for i in ind]
-                    f_ch = [chan[i] for i in ind]
-                    f_m = [marker[i] for i in ind]
-
-                    y = [y[i] for i in range(len(y)) if i not in ind]
-                    tmpx = [tmpx[i] for i in range(len(tmpx)) if i not in ind]
-                    chan = [chan[i] for i in range(len(chan)) if i not in ind]
-                    marker = [marker[i] for i in range(len(marker)) if i not in ind]
+                    ind = (y < F[0])
+                    idx = np.where(ind)[0]
                     
-                    L1 = [f_y[i] for i in range(len(f_y)) if f_m[i] & LineStart > 0]
-                    L2 = [f_y[i] for i in range(len(f_y)) if f_m[i] & LineStop > 0]
-
-                    if y and y[0] == F[0] and marker[0] == 2:
-                        L2.append(y[0])
-                        del y[0]
-                        del tmpx[0]
-                        del chan[0]
-                        del marker[0]
-                    if y and y[0] == F[0] and marker[0] == 4:
-                        del y[0]
-                        del tmpx[0]
-                        del chan[0]
-                        del marker[0]
-
+                    f_y     = y[idx]
+                    f_x     = tmpx[idx]
+                    f_ch    = chan[idx]
+                    f_m     = marker[idx]
+                                      
+                                   
+                    y = np.delete(y, idx)
+                    tmpx = np.delete(tmpx, idx)
+                    chan = np.delete(chan, idx)
+                    marker = np.delete(marker, idx)
+                    
+                    L1 = f_y[(f_m.astype(int) & LineStart) > 0]
+                    L2 = f_y[(f_m.astype(int) & LineStop) > 0]
+                    
+                    if (y[0] == F[0]) and (marker[0]==2):
+                        L2 = np.concatenate((L2, [y[0]])) 
+                        y = np.delete(y, 0)
+                        tmpx = np.delete(tmpx, 0)
+                        chan = np.delete(chan, 0)
+                        marker = np.delete(marker, 0)
+                        
+                    if (y[0] == F[0]) and (marker[0]==4):
+                        y = np.delete(y, 0)
+                        tmpx = np.delete(tmpx, 0)
+                        chan = np.delete(chan, 0)
+                        marker = np.delete(marker, 0)    
+                    
+                    
                     f_times.append(F[0])
                     F = F[1:]
                     line = 0
@@ -1139,13 +1156,21 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                     if len(L1) > 1:
                         n_frames += 1
                         for j in range(len(L2)):
-                            ind = [(f_y[k] > L1[j]) & (f_y[k] < L2[j]) for k in range(len(f_y))]
-                            t_sync.extend([f_y[k] for k in range(len(f_y)) if ind[k]])
-                            t_tcspc.extend([np.uint16(f_x[k]) for k in range(len(f_x)) if ind[k]])
-                            t_chan.extend([np.uint8(f_ch[k]) for k in range(len(f_ch)) if ind[k]])
-                            t_line.extend([np.uint16(line) for _ in range(sum(ind))])
-                            t_col.extend([np.uint16(np.floor(nx * (f_y[k] - L1[j]) / (L2[j] - L1[j]))) for k in range(len(f_y)) if ind[k]])
-                            t_frame.extend([np.uint16(n_frames) for _ in range(sum(ind))])
+                            ind = (f_y > L1[j]) & (f_y < L2[j])
+                            idx = np.where(ind)[0]
+                            t_sync.extend(f_y[idx])
+                            t_tcspc.extend(np.uint16(f_x[idx]))
+                            t_chan.extend(np.uint8(f_ch[idx]))
+                            t_line.extend(np.uint16([line] * np.sum(ind)))
+                            t_col.extend(np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j]))))
+                            t_frame.extend(np.uint16([n_frames] * np.sum(ind)))
+                            # ind = [(f_y[k] > L1[j]) & (f_y[k] < L2[j]) for k in range(len(f_y))]
+                            # t_sync.extend([f_y[k] for k in range(len(f_y)) if ind[k]])
+                            # t_tcspc.extend([np.uint16(f_x[k]) for k in range(len(f_x)) if ind[k]])
+                            # t_chan.extend([np.uint8(f_ch[k]) for k in range(len(f_ch)) if ind[k]])
+                            # t_line.extend([np.uint16(line) for _ in range(sum(ind))])
+                            # t_col.extend([np.uint16(np.floor(nx * (f_y[k] - L1[j]) / (L2[j] - L1[j]))) for k in range(len(f_y)) if ind[k]])
+                            # t_frame.extend([np.uint16(n_frames) for _ in range(sum(ind))])
                             dt[line] += (L2[j] - L1[j])
                             line += 1
 
@@ -1158,7 +1183,8 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
 
             tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons, head)   
             
-        F = [val for val in y if val & Frame > 0]
+        # F = [val for val in y if val & Frame > 0]
+        F = y[(marker.astype(int) & Frame) >0] # Frame changes
 
         t_sync = []
         t_tcspc = []
@@ -1175,11 +1201,13 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                 marker = []
                 line = 0
             else:
-                ind = [i for i in range(len(y)) if y[i] <= F[0]]
-                y = [y[i] for i in range(len(y)) if i not in ind]
-                tmpx = [tmpx[i] for i in range(len(tmpx)) if i not in ind]
-                chan = [chan[i] for i in range(len(chan)) if i not in ind]
-                marker = [marker[i] for i in range(len(marker)) if i not in ind]
+                ind = y<=F[0]
+                idx = np.where(ind)[0]
+                y = np.delete(y, idx)
+                tmpx = np.delete(tmpx, idx)
+                chan = np.delete(chan, idx)
+                marker = np.delete(marker, idx)
+
                 line = 0
                 n_frames += 1
                 f_times.append(F[0])
@@ -1193,9 +1221,10 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         tmpx = []
         chan = []
         
-        L1 = [f_y[i] for i in range(len(f_y)) if f_m[i] & LineStart > 0]
-        L2 = [f_y[i] for i in range(len(f_y)) if f_m[i] & LineStop > 0]
-
+        L1 = f_y[(f_m.astype(int) & LineStart) > 0]
+        L2 = f_y[(f_m.astype(int) & LineStop) > 0]
+        
+        
         ll = line + len(L2) - 1
         if ll > ny:
             L1 = L1[:ny - line ]
@@ -1203,13 +1232,15 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
 
         if len(L1) > 1:
             for j in range(len(L2)):
-                ind = [(f_y[k] > L1[j]) & (f_y[k] < L2[j]) for k in range(len(f_y))]
-                t_sync.extend([f_y[k] for k in range(len(f_y)) if ind[k]])
-                t_tcspc.extend([np.uint16(f_x[k]) for k in range(len(f_x)) if ind[k]])
-                t_chan.extend([np.uint8(f_ch[k]) for k in range(len(f_ch)) if ind[k]])
-                t_line.extend([np.uint16(line) for _ in range(sum(ind))])
-                t_col.extend([np.uint16( np.floor(nx * (f_y[k] - L1[j]) / (L2[j] - L1[j]))) for k in range(len(f_y)) if ind[k]])
-                t_frame.extend([np.uint16(n_frames) for _ in range(sum(ind))])
+                
+                ind = (f_y > L1[j]) & (f_y < L2[j])
+                idx = np.where(ind)[0]
+                t_sync.extend(f_y[idx])
+                t_tcspc.extend(np.uint16(f_x[idx]))
+                t_chan.extend(np.uint8(f_ch[idx]))
+                t_line.extend(np.uint16([line] * np.sum(ind)))
+                t_col.extend(np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j]))))
+                t_frame.extend(np.uint16([n_frames] * np.sum(ind)))
                 dt[line] += (L2[j] - L1[j])
                 line += 1
 

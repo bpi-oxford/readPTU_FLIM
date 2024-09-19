@@ -528,6 +528,74 @@ def LSFit(param, y, irf, p, plt_flag = None):
     
     return err
 
+def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 100, scattering = True):
+    """
+    The function DistFluofit performs a fit of a distributed decay curve.
+    It is called by:
+    [cx, tau, offset, csh, z, t, err] = DistFluofit(irf, y, p, dt, shift).
+    The function arguments are:
+        irf 	 = 	Instrumental Response Function
+        y 	     = 	Fluorescence decay data
+        p 	     = 	Time between laser exciation pulses (in nanoseconds)
+        dt 	     = 	Time width of one TCSPC channel (in nanoseconds)
+        shift	 =	boundaries of colorshift in TCSPC channels
+        
+        The return parameters are:
+        cx	     =	lifetime distribution
+        tau      =   used lifetimes
+        offset   =	Offset
+        csh      =   Color Shift
+        z 	     =	Fitted fluorecence curve
+        t        =   time axis
+        err      =   chi2 value
+        
+        """
+    if irf is None:
+        irf[0] = 1 # just put 1 in the first time bin for IRF
+    irf = np.array(irf).flatten()
+    y   = np.array(y).flatten()
+    n = len(irf)
+    tp = dt*np.arange(1,p/dt+1) 
+    t = np.arange(1,n+1)
+    if len(shift)==1:
+        shmin = -np.abs(shift).astype(np.int32)
+        shmax = np.abs(shift).astype(np.int32)
+    elif len(shift)==2:
+        shmin, shmax = shift        
+    else:
+        print('shift should have only two values, sh_min and sh_max')
+        
+    tau = (1/dt)/np.exp(np.arange(N+1)/N * np.log(p/dt)) # distribution of decay times
+    if scattering is True:
+        M0 = np.column_stack((np.ones(len(t)), irf, Convol(irf,np.exp(-tp[:, None]*tau))))
+    else:  
+        M0 = np.column_stack((np.ones(len(t)), Convol(irf,np.exp(-tp[:, None]*tau))))
+    M0 = M0/(np.ones(n)[:, None]*np.sum(M0,axis=0)); # Normalized decay curves
+    
+    # search for optimal irf colorshift   
+    err = np.empty(0)     
+    TINY = 10**-30
+    if shmax-shmin>0:
+        for c in range(shmin,shmax+1):
+            M = (1 - c + np.floor(c)) * M0[(t - np.int_(c) - 1) % n,:] + \
+                 (c - np.floor(c)) * M0[(t - int(np.ceil(c)) - 1) % n,:]
+            ind = np.arange(np.max([0,c]), np.min([n-1,n+c-1])).astype(np.int32)     
+            cx,_ = PIRLSnonneg(M[ind,: ],y[ind],10)
+            z = M @ cx
+            err = np.concatenate((err, [np.sum((z-y+TINY)**2/np.abs(z+TINY)/len(ind))]))
+        shv = np.arange(shmin,shmax+0.1,0.1)
+        tmp = np.interp(shv,np.arange(shmin,shmax+1),err)
+        pos = np.argmin(tmp)
+        csh = shv[pos]
+    else:
+        csh = shmin
+        
+        M = (1 - csh + np.int_(csh)) * M0[(t - np.int_(csh) - 1) % n,:] + \
+             (csh - np.int_(csh)) * M0[(t - int(np.ceil(csh)) - 1) % n,:]
+        
+        
+            
+
 def FluoFit(irf, y, p, dt, tau, lim = None, init = None, flag_ml = True, plt_flag = 1):
     """
     The function FLUOFIT performs a fit of a multi-exponential decay curve.
