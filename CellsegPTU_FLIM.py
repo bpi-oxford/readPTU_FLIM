@@ -36,7 +36,7 @@ if os.path.exists(res_file):
      # timeF       = FLIM_data['time']
      globals().update(FLIM_data)  
 else:
-     head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame = PTU_ScanRead(filename)
+     head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame = PTU_ScanRead(filename) # Reading photon stream
      
 resolution = 0.2 # ns for tcspc     
 dind = np.unique(im_chan) # unique detector channels

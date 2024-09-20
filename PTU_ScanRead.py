@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import sys
 import time
 import pickle
-
+from numba import njit 
 
 #%%
 
@@ -258,12 +258,12 @@ class PTUreader():
         record_type = self.rec_type_r[self.head['TTResultFormat_TTTRRecType']]
         # num_T3records = self.head['TTResult_NumberOfRecords']
         
-     
+        print(record_type)
         #Next is to do T3Records formatting according to Record_type
 
         if record_type == 'rtPicoHarpT3':
 
-            # print('TCSPC Hardware: {}'.format(record_type[2:]))
+            print('TCSPC Hardware: {}'.format(record_type[2:]))
             #   +----------------------+ T3 32 bit record  +---------------------+
             #   |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|  |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x| --> 32 bit record
             #   +-------------------------------+  +-------------------------------+
@@ -291,7 +291,7 @@ class PTUreader():
             
         elif record_type == 'rtPicoHarpT2':
 
-            # print('TCSPC Hardware: {}'.format(record_type[2:]))
+            print('TCSPC Hardware: {}'.format(record_type[2:]))
 
             #   +----------------------+ T2 32 bit record  +---------------------+
             #   |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|  |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x| --> 32 bit record
@@ -312,7 +312,7 @@ class PTUreader():
 
         elif record_type in ['rtHydraHarpT3', 'rtHydraHarp2T3', 'rtTimeHarp260NT3', 'rtTimeHarp260PT3','rtMultiHarpNT3']:
 
-            # print('TCSPC Hardware: {}'.format(record_type[2:]))
+            print('TCSPC Hardware: {}'.format(record_type[2:]))
 
             #   +----------------------+ T3 32 bit record  +---------------------+
             #   |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|  |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x| --> 32 bit record
@@ -339,7 +339,7 @@ class PTUreader():
 
         elif record_type == 'rtHydraHarpT2':
 
-            # print('TCSPC Hardware: {}'.format(record_type[2:]))
+            print('TCSPC Hardware: {}'.format(record_type[2:]))
 
             #   +----------------------+ T3 32 bit record  +---------------------+
             #   |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|  |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x| --> 32 bit record
@@ -363,7 +363,7 @@ class PTUreader():
 
         elif record_type in ['rtHydraHarp2T2', 'rtTimeHarp260NT2', 'rtTimeHarp260PT2','rtMultiHarpNT2']:
 
-            # print('TCSPC Hardware: {}'.format(record_type[2:]))
+            print('TCSPC Hardware: {}'.format(record_type[2:]))
 
             #   +----------------------+ T3 32 bit record  +---------------------+
             #   |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|  |x|x|x|x|x|x|x|x|x|x|x|x|x|x|x|x| --> 32 bit record
@@ -543,6 +543,7 @@ def mHist2(x, y, xv=None, yv=None):
 
     return h, xv, yv
 
+@njit
 def mHist3(x, y, z, xv=None, yv=None, zv=None):
     # x = np.asarray(x).flatten()
     # y = np.asarray(y).flatten()
@@ -645,6 +646,7 @@ def mHist3(x, y, z, xv=None, yv=None, zv=None):
 
     return h, xv, yv, zv
 
+@njit
 def mHist4(x, y, z, t, xv=None, yv=None, zv=None, tv=None):
     # Convert inputs to flattened arrays
     x = np.asarray(x).ravel()
@@ -1056,6 +1058,16 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         marker = []
         
         dt = np.zeros(ny)
+        
+        # nphot = head['TTResult_NumberOfRecords']
+        # im_sync = np.zeros(nphot)
+        # im_tcspc = np.zeros(nphot,dtype=np.uint16)
+        # im_chan = np.zeros(nphot,dtype=np.uint8)
+        # im_line = np.copy(im_tcspc)
+        # im_col = np.copy(im_tcspc)
+        # im_frame = np.copy(im_tcspc)*np.nan
+        
+        
         im_sync = []
         im_tcspc = []
         im_chan = []
@@ -1066,6 +1078,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         cnt = 0
         tend = 0
         line = 0
+        cn_phot = 0
         n_frames = -1
         f_times = []
         
@@ -1083,188 +1096,462 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
             Frame = -1
             in_frame = True
             n_frames += 1
+          
             
-        tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons, head)    
         
-
-        while num > 0:
-
-            t_sync = []
-            t_tcspc = []
-            t_chan = []
-            t_line = []
-            t_col = []
-            t_frame = []
-
-            cnt += num
-            tmp_sync += tend
+        if head['ImgHdr_BiDirect'] == 0: # monodirectional scan
+            tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons, head)    
             
-            y = np.concatenate((y, tmp_sync))  # Appending selected elements to y
-            tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc / chDiv) ))  # Appending selected elements to tmpx
-            chan = np.concatenate((chan, tmp_chan ))  # Appending selected elements to chan
-            marker = np.concatenate((marker, tmp_special))  # Appending selected elements to markers
-
-
-
-            # y.extend(tmp_sync)
-            # tmpx.extend(tmp_tcspc)
-            # chan.extend(tmp_chan)
-            # marker.extend(tmp_special)
-            tend = y[-1] + loc
-            
+    
+            while num > 0:
+    
+                # t_sync = []
+                # t_tcspc = []
+                # t_chan = []
+                # t_line = []
+                # t_col = []
+                # t_frame = []
+    
+                cnt += num
+                tmp_sync += tend
+                
+                
+                y = np.concatenate((y, tmp_sync))  # Appending selected elements to y
+                tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc / chDiv) ))  # Appending selected elements to tmpx
+                chan = np.concatenate((chan, tmp_chan ))  # Appending selected elements to chan
+                marker = np.concatenate((marker, tmp_special))  # Appending selected elements to markers
+    
+    
+    
+                # y.extend(tmp_sync)
+                # tmpx.extend(tmp_tcspc)
+                # chan.extend(tmp_chan)
+                # marker.extend(tmp_special)
+                tend = y[-1] + loc
+                
+                F = y[(marker.astype(int) & Frame) >0] # Frame changes
+    
+                # F = [val for val in y if val and Frame > 0]
+                while len(F)>0:
+    
+                    if len(F)>0:
+                        ind = (y < F[0])
+                        idx = np.where(ind)[0]
+                        
+                        f_y     = y[idx]
+                        f_x     = tmpx[idx]
+                        f_ch    = chan[idx]
+                        f_m     = marker[idx]
+                                          
+                                       
+                        y = np.delete(y, idx)
+                        tmpx = np.delete(tmpx, idx)
+                        chan = np.delete(chan, idx)
+                        marker = np.delete(marker, idx)
+                        
+                        L1 = f_y[(f_m.astype(int) & LineStart) > 0]
+                        L2 = f_y[(f_m.astype(int) & LineStop) > 0]
+                        
+                        if (y[0] == F[0]) and (marker[0]==2):
+                            L2 = np.concatenate((L2, [y[0]])) 
+                            y = np.delete(y, 0)
+                            tmpx = np.delete(tmpx, 0)
+                            chan = np.delete(chan, 0)
+                            marker = np.delete(marker, 0)
+                            
+                        if (y[0] == F[0]) and (marker[0]==4):
+                            y = np.delete(y, 0)
+                            tmpx = np.delete(tmpx, 0)
+                            chan = np.delete(chan, 0)
+                            marker = np.delete(marker, 0)    
+                        
+                        
+                        f_times.append(F[0])
+                        F = F[1:]
+                        line = 0
+    
+                        if len(L1) > 1:
+                            n_frames += 1
+                            for j in range(len(L2)):
+                                ind = (f_y > L1[j]) & (f_y < L2[j])
+                                idx = np.where(ind)[0]
+                                n_phot = len(idx)
+                                
+                                # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
+                                # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
+                                # im_tcspc[cn_phot:cn_phot + n_phot ] = np.uint16(f_x[idx])
+                                # im_chan[cn_phot:cn_phot + n_phot ] = np.uint8(f_ch[idx])
+                                # im_line[cn_phot:cn_phot + n_phot ] = np.uint16(line)
+                                # im_col[cn_phot:cn_phot + n_phot ] = np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j])))
+    
+                                im_frame.extend( np.uint16([n_frames] * np.sum(ind)))
+                                im_sync.extend( f_y[idx])
+                                im_tcspc.extend(np.uint16(f_x[idx]))
+                                im_chan.extend(np.uint8(f_ch[idx]))
+                                im_line.extend( np.uint16(line))
+                                im_col.extend(np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j]))))                             
+                                
+                                # t_sync.extend(f_y[idx])
+                                # t_tcspc.extend(np.uint16(f_x[idx]))
+                                # t_chan.extend(np.uint8(f_ch[idx]))
+                                # t_line.extend(np.uint16([line] * np.sum(ind)))
+                                # t_col.extend(np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j]))))
+                                # t_frame.extend(np.uint16([n_frames] * np.sum(ind)))
+                                
+                                dt[line] += (L2[j] - L1[j])
+                                line += 1
+    
+                        # im_sync.extend(t_sync)
+                        # im_tcspc.extend(t_tcspc)
+                        # im_chan.extend(t_chan)
+                        # im_line.extend(t_line)
+                        # im_col.extend(t_col)
+                        # im_frame.extend(t_frame)
+    
+                tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons, head)   
+                
+            # F = [val for val in y if val & Frame > 0]
             F = y[(marker.astype(int) & Frame) >0] # Frame changes
-
-            # F = [val for val in y if val and Frame > 0]
-            while F:
-
-                if F:
-                    ind = (y < F[0])
+    
+            # t_sync = []
+            # t_tcspc = []
+            # t_chan = []
+            # t_line = []
+            # t_col = []
+            # t_frame = []
+    
+            if not in_frame:
+                if len(F)==0:
+                    y = []
+                    tmpx = []
+                    chan = []
+                    marker = []
+                    line = 0
+                else:
+                    ind = y<=F[0]
                     idx = np.where(ind)[0]
-                    
-                    f_y     = y[idx]
-                    f_x     = tmpx[idx]
-                    f_ch    = chan[idx]
-                    f_m     = marker[idx]
-                                      
-                                   
                     y = np.delete(y, idx)
                     tmpx = np.delete(tmpx, idx)
                     chan = np.delete(chan, idx)
                     marker = np.delete(marker, idx)
-                    
-                    L1 = f_y[(f_m.astype(int) & LineStart) > 0]
-                    L2 = f_y[(f_m.astype(int) & LineStop) > 0]
-                    
-                    if (y[0] == F[0]) and (marker[0]==2):
-                        L2 = np.concatenate((L2, [y[0]])) 
-                        y = np.delete(y, 0)
-                        tmpx = np.delete(tmpx, 0)
-                        chan = np.delete(chan, 0)
-                        marker = np.delete(marker, 0)
-                        
-                    if (y[0] == F[0]) and (marker[0]==4):
-                        y = np.delete(y, 0)
-                        tmpx = np.delete(tmpx, 0)
-                        chan = np.delete(chan, 0)
-                        marker = np.delete(marker, 0)    
-                    
-                    
-                    f_times.append(F[0])
-                    F = F[1:]
-                    line = 0
-
-                    if len(L1) > 1:
-                        n_frames += 1
-                        for j in range(len(L2)):
-                            ind = (f_y > L1[j]) & (f_y < L2[j])
-                            idx = np.where(ind)[0]
-                            t_sync.extend(f_y[idx])
-                            t_tcspc.extend(np.uint16(f_x[idx]))
-                            t_chan.extend(np.uint8(f_ch[idx]))
-                            t_line.extend(np.uint16([line] * np.sum(ind)))
-                            t_col.extend(np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j]))))
-                            t_frame.extend(np.uint16([n_frames] * np.sum(ind)))
-                            # ind = [(f_y[k] > L1[j]) & (f_y[k] < L2[j]) for k in range(len(f_y))]
-                            # t_sync.extend([f_y[k] for k in range(len(f_y)) if ind[k]])
-                            # t_tcspc.extend([np.uint16(f_x[k]) for k in range(len(f_x)) if ind[k]])
-                            # t_chan.extend([np.uint8(f_ch[k]) for k in range(len(f_ch)) if ind[k]])
-                            # t_line.extend([np.uint16(line) for _ in range(sum(ind))])
-                            # t_col.extend([np.uint16(np.floor(nx * (f_y[k] - L1[j]) / (L2[j] - L1[j]))) for k in range(len(f_y)) if ind[k]])
-                            # t_frame.extend([np.uint16(n_frames) for _ in range(sum(ind))])
-                            dt[line] += (L2[j] - L1[j])
-                            line += 1
-
-                    im_sync.extend(t_sync)
-                    im_tcspc.extend(t_tcspc)
-                    im_chan.extend(t_chan)
-                    im_line.extend(t_line)
-                    im_col.extend(t_col)
-                    im_frame.extend(t_frame)
-
-            tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons, head)   
-            
-        # F = [val for val in y if val & Frame > 0]
-        F = y[(marker.astype(int) & Frame) >0] # Frame changes
-
-        t_sync = []
-        t_tcspc = []
-        t_chan = []
-        t_line = []
-        t_col = []
-        t_frame = []
-
-        if not in_frame:
-            if len(F)==0:
-                y = []
-                tmpx = []
-                chan = []
-                marker = []
-                line = 0
-            else:
-                ind = y<=F[0]
-                idx = np.where(ind)[0]
-                y = np.delete(y, idx)
-                tmpx = np.delete(tmpx, idx)
-                chan = np.delete(chan, idx)
-                marker = np.delete(marker, idx)
-
-                line = 0
-                n_frames += 1
-                f_times.append(F[0])
-
-        f_y = y
-        f_x = tmpx
-        f_ch = chan
-        f_m = marker
-        
-        y = []
-        tmpx = []
-        chan = []
-        
-        L1 = f_y[(f_m.astype(int) & LineStart) > 0]
-        L2 = f_y[(f_m.astype(int) & LineStop) > 0]
-        
-        
-        ll = line + len(L2) - 1
-        if ll > ny:
-            L1 = L1[:ny - line ]
-            L2 = L2[:ny - line ]
-
-        if len(L1) > 1:
-            for j in range(len(L2)):
-                
-                ind = (f_y > L1[j]) & (f_y < L2[j])
-                idx = np.where(ind)[0]
-                t_sync.extend(f_y[idx])
-                t_tcspc.extend(np.uint16(f_x[idx]))
-                t_chan.extend(np.uint8(f_ch[idx]))
-                t_line.extend(np.uint16([line] * np.sum(ind)))
-                t_col.extend(np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j]))))
-                t_frame.extend(np.uint16([n_frames] * np.sum(ind)))
-                dt[line] += (L2[j] - L1[j])
-                line += 1
-
-        im_sync.extend(t_sync)
-        im_tcspc.extend(t_tcspc)
-        im_chan.extend(t_chan)
-        im_line.extend(t_line)
-        im_col.extend(t_col)
-        im_frame.extend(t_frame)
     
+                    line = 0
+                    n_frames += 1
+                    f_times.append(F[0])
+    
+            f_y = y
+            f_x = tmpx
+            f_ch = chan
+            f_m = marker
+            
+            y = []
+            tmpx = []
+            chan = []
+            
+            L1 = f_y[(f_m.astype(int) & LineStart) > 0]
+            L2 = f_y[(f_m.astype(int) & LineStop) > 0]
+            
+            
+            ll = line + len(L2) - 1
+            if ll > ny:
+                L1 = L1[:ny - line ]
+                L2 = L2[:ny - line ]
+    
+            if len(L1) > 1:
+                for j in range(len(L2)):
+                    
+                    ind = (f_y > L1[j]) & (f_y < L2[j])
+                    idx = np.where(ind)[0]
+                    
+                    n_phot = len(idx)
+                    
+                    im_frame.extend( np.uint16([n_frames] * np.sum(ind)))
+                    im_sync.extend( f_y[idx])
+                    im_tcspc.extend(np.uint16(f_x[idx]))
+                    im_chan.extend(np.uint8(f_ch[idx]))
+                    im_line.extend( np.uint16(line))
+                    im_col.extend(np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j]))))
+                    
+                    # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
+                    # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
+                    # im_tcspc[cn_phot:cn_phot + n_phot ] = np.uint16(f_x[idx])
+                    # im_chan[cn_phot:cn_phot + n_phot ] = np.uint8(f_ch[idx])
+                    # im_line[cn_phot:cn_phot + n_phot ] = np.uint16(line)
+                    # im_col[cn_phot:cn_phot + n_phot ] = np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j])))
+    
+                    # cn_phot += n_phot 
+                    
+                    
+                    # t_sync.extend(f_y[idx])
+                    # t_tcspc.extend(np.uint16(f_x[idx]))
+                    # t_chan.extend(np.uint8(f_ch[idx]))
+                    # t_line.extend(np.uint16([line] * np.sum(ind)))
+                    # t_col.extend(np.uint16(np.floor(nx * (f_y[idx] - L1[j]) / (L2[j] - L1[j]))))
+                    # t_frame.extend(np.uint16([n_frames] * np.sum(ind)))
+                    dt[line] += (L2[j] - L1[j])
+                    line += 1
+        elif head['ImgHdr_BiDirect'] == 1: # bidirectional scan     
+            cnt = 0
+            tend = 0
+            line = 0 # python compatible
+            n_frames = -1
+            f_times = []
+            
+            y = []
+            tmpx = []
+            chan = []
+            marker = []
+            dt = np.zeros(ny)
+            
+            im_sync = []
+            im_tcspc = []
+            im_chan = []
+            im_line = []
+            im_col = []
+            im_frame = []
+            Turns1 = []
+            Turns2 = []
+            
+            
+            
+            tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons, head)    
+            
+    
+            while num > 0:
+                cnt += num
+                tmp_sync += tend
+                
+                
+                y = np.concatenate((y, tmp_sync))  # Appending selected elements to y
+                tmpx = np.concatenate((tmpx, np.floor(tmp_tcspc / chDiv) ))  # Appending selected elements to tmpx
+                chan = np.concatenate((chan, tmp_chan ))  # Appending selected elements to chan
+                marker = np.concatenate((marker, tmp_special))  # Appending selected elements to markers
+    
+    
+                tend = y[-1] + loc
+                
+                F = y[(marker.astype(int) & Frame) >0] # Frame changes
+    
+                # F = [val for val in y if val and Frame > 0]
+                while len(F)>0:
+    
+                    if len(F)>0:
+                        ind = (y < F[0])
+                        idx = np.where(ind)[0]
+                        
+                        f_y     = y[idx]
+                        f_x     = tmpx[idx]
+                        f_ch    = chan[idx]
+                        f_m     = marker[idx]
+                                          
+                                       
+                        y = np.delete(y, idx)
+                        tmpx = np.delete(tmpx, idx)
+                        chan = np.delete(chan, idx)
+                        marker = np.delete(marker, idx)
+                        
+                        L1 = f_y[(f_m.astype(int) & LineStart) > 0]
+                        L2 = f_y[(f_m.astype(int) & LineStop) > 0]
+                        
+                        if (y[0] == F[0]) and (marker[0]==2):
+                            L2 = np.concatenate((L2, [y[0]])) 
+                            y = np.delete(y, 0)
+                            tmpx = np.delete(tmpx, 0)
+                            chan = np.delete(chan, 0)
+                            marker = np.delete(marker, 0)
+                            
+                        if (y[0] == F[0]) and (marker[0]==4):
+                            y = np.delete(y, 0)
+                            tmpx = np.delete(tmpx, 0)
+                            chan = np.delete(chan, 0)
+                            marker = np.delete(marker, 0)    
+                        
+                        
+                        f_times.append(F[0])
+                        F = F[1:]
+                        line = 0
+                        
+                        if len(L2) > 2:
+                            n_frames += 1
+                            for j in range(0, 2 * (len(L2) // 2 - 1), 2):
+                                t1 = L1[0]
+                                t2 = L2[0]
+                                ind = (f_y >= t1) & (f_y <= t2)
+                                idx = np.where(ind)[0]
+                                n_phot = len(idx)
+                                
+                                im_frame.extend( np.uint16([n_frames] * np.sum(ind)))
+                                im_sync.extend( f_y[idx])
+                                im_tcspc.extend(np.uint16(f_x[idx]))
+                                im_chan.extend(np.uint8(f_ch[idx]))
+                                im_line.extend(np.uint16([line] * np.sum(ind)))
+                                im_col.extend(np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1))))
+                                
+                                
+                                
+                                # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
+                                # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
+                                # im_tcspc[cn_phot:cn_phot + n_phot ] = np.uint16(f_x[idx])
+                                # im_chan[cn_phot:cn_phot + n_phot ] = np.uint8(f_ch[idx])
+                                # im_line[cn_phot:cn_phot + n_phot ] = np.uint16(line)
+                                # im_col[cn_phot:cn_phot + n_phot ] = np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1)))
+    
+                                # cn_phot += n_phot 
+                                
+                                dt[line] += t2-t1
+                                line += 1
+                                
+                                t1 = L1[1]
+                                t2 = L2[1]
+                                
+                                ind = (f_y >= t1) & (f_y <= t2)
+                                idx = np.where(ind)[0]
+                                n_phot = len(idx)
+                                
+                                im_frame.extend( np.uint16([n_frames] * np.sum(ind)))
+                                im_sync.extend( f_y[idx])
+                                im_tcspc.extend(np.uint16(f_x[idx]))
+                                im_chan.extend(np.uint8(f_ch[idx]))
+                                im_line.extend(np.uint16([line] * np.sum(ind)))
+                                im_col.extend(np.uint16(nx - np.floor(nx * (f_y[idx] - t1) / (t2 - t1))))
+                                
+                                # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
+                                # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
+                                # im_tcspc[cn_phot:cn_phot + n_phot ] = np.uint16(f_x[idx])
+                                # im_chan[cn_phot:cn_phot + n_phot ] = np.uint8(f_ch[idx])
+                                # im_line[cn_phot:cn_phot + n_phot ] = np.uint16(line)
+                                # im_col[cn_phot:cn_phot + n_phot ] = np.uint16(nx - np.floor(nx * (f_y[idx] - t1) / (t2 - t1)))
+    
+                                # cn_phot += n_phot 
+                                dt[line] += t2-t1
+                                line += 1
+                                
+                                L1 = L1[2:]
+                                L2 = L2[2:]
+
+    
+                tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons, head)   
+                
+            # F = [val for val in y if val & Frame > 0]
+            F = y[(marker.astype(int) & Frame) >0] # Frame changes
+
+    
+            if not in_frame:
+                if len(F)==0:
+                    y = []
+                    tmpx = []
+                    chan = []
+                    marker = []
+                    line = 0
+                else:
+                    ind = y<=F[0]
+                    idx = np.where(ind)[0]
+                    y = np.delete(y, idx)
+                    tmpx = np.delete(tmpx, idx)
+                    chan = np.delete(chan, idx)
+                    marker = np.delete(marker, idx)
+    
+                    line = 0
+                    n_frames += 1
+                    f_times.append(F[0])
+    
+            f_y = y
+            f_x = tmpx
+            f_ch = chan
+            f_m = marker
+            
+            y = []
+            tmpx = []
+            chan = []
+            
+            L1 = f_y[(f_m.astype(int) & LineStart) > 0]
+            L2 = f_y[(f_m.astype(int) & LineStop) > 0]
+            
+            
+            ll = line + len(L2) - 1
+            if ll > ny:
+                L1 = L1[:ny - line ]
+                L2 = L2[:ny - line ]
+    
+            if len(L2) > 2:
+                for j in range(0, 2 * (len(L2) // 2 - 1), 2):
+                    t1 = L1[0]
+                    t2 = L2[0]
+                    ind = (f_y >= t1) & (f_y <= t2)
+                    idx = np.where(ind)[0]
+                    n_phot = len(idx)
+                    
+                    im_frame.extend( np.uint16([n_frames] * np.sum(ind)))
+                    im_sync.extend( f_y[idx])
+                    im_tcspc.extend(np.uint16(f_x[idx]))
+                    im_chan.extend(np.uint8(f_ch[idx]))
+                    im_line.extend( np.uint16(line))
+                    im_col.extend(np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1))))
+                    
+                    
+                    
+                    # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
+                    # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
+                    # im_tcspc[cn_phot:cn_phot + n_phot ] = np.uint16(f_x[idx])
+                    # im_chan[cn_phot:cn_phot + n_phot ] = np.uint8(f_ch[idx])
+                    # im_line[cn_phot:cn_phot + n_phot ] = np.uint16(line)
+                    # im_col[cn_phot:cn_phot + n_phot ] = np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1)))
+
+                    # cn_phot += n_phot 
+                    
+                    dt[line] += t2-t1
+                    line += 1
+                    
+                    t1 = L1[1]
+                    t2 = L2[1]
+                    
+                    ind = (f_y >= t1) & (f_y <= t2)
+                    idx = np.where(ind)[0]
+                    n_phot = len(idx)
+                    
+                    im_frame.extend( np.uint16([n_frames] * np.sum(ind)))
+                    im_sync.extend( f_y[idx])
+                    im_tcspc.extend(np.uint16(f_x[idx]))
+                    im_chan.extend(np.uint8(f_ch[idx]))
+                    im_line.extend( np.uint16(line))
+                    im_col.extend(np.uint16(nx - np.floor(nx * (f_y[idx] - t1) / (t2 - t1))))
+                    
+                    # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
+                    # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
+                    # im_tcspc[cn_phot:cn_phot + n_phot ] = np.uint16(f_x[idx])
+                    # im_chan[cn_phot:cn_phot + n_phot ] = np.uint8(f_ch[idx])
+                    # im_line[cn_phot:cn_phot + n_phot ] = np.uint16(line)
+                    # im_col[cn_phot:cn_phot + n_phot ] = np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1)))
+
+                    # cn_phot += n_phot 
+                    dt[line] += t2-t1
+                    line += 1
+                    
+                    L1 = L1[2:]
+                    L2 = L2[2:]
+
+
         head['ImgHdr_FrameTime'] = 1e9 * np.mean(np.diff(f_times)) / head['TTResult_SyncRate']
         head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
         head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime'] / n_frames
         
         dind = np.unique(im_chan)
-        tag = np.zeros((nx,ny,len(dind),np.max(im_frame), cnum-1))
+        tag = np.zeros((nx,ny,len(dind),np.max(im_frame)+1, cnum))
         tau = np.copy(tag)
+        im_frame = np.asarray(im_frame)
+        im_col = np.asarray(im_col)
+        im_sync = np.asarray(im_sync)
+        im_line = np.asarray(im_line)
+        im_chan = np.asarray(im_chan)
+        im_tcspc = np.asarray(im_tcspc)
+        print('Processing Frames')
         for frame in range(np.max(im_frame)):
-            [tmptag, tmptau] = Process_Frame(im_sync[im_frame == frame],im_col[im_frame == frame],\
+            tmptag, tmptau,_ = Process_Frame(im_sync[im_frame == frame],im_col[im_frame == frame],\
                                              im_line[im_frame == frame],im_chan[im_frame == frame],\
-                                                 im_tcspc[im_frame == frame],head, cnum)[0:1]
+                                                 im_tcspc[im_frame == frame],head, cnum, resolution = 0.2)
             if tmptag.size > 0:
-                tag[:,:,:,frame, cnum] = tmptag
-                tau[:,:,:,frame, cnum] = tmptau
+                tag[:,:,:,frame, :] = tmptag
+                tau[:,:,:,frame, :] = tmptau
         
         SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
         maxch_n = len(dind)
@@ -1608,13 +1895,13 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                  
                                  
                          # Process the frame data
-                         tmptag, tmptau = Process_Frame(im_sync[im_frame == frame], \
+                         tmptag, tmptau, _ = Process_Frame(im_sync[im_frame == frame], \
                                                         im_col[im_frame == frame], im_line[im_frame == frame], \
                                                             im_chan[im_frame == frame], im_tcspc[im_frame == frame], \
-                                                                head, cnum)[0:1]
+                                                                head, cnum)
                          if tmptag.size > 0:
-                             tag[:, :, :, frame, cnum] = tmptag
-                             tau[:, :, :, frame, cnum] = tmptau
+                             tag[:, :, :, frame, :] = tmptag
+                             tau[:, :, :, frame, :] = tmptau
                          
                          frame += 1
                          cwaitbar(frame,nz,message = "Fames Processed")
@@ -1666,12 +1953,12 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
 
                 
             
-             tmptag, tmptau = Process_Frame(im_sync[im_frame == frame], im_col[im_frame == frame],\
+             tmptag, tmptau,_ = Process_Frame(im_sync[im_frame == frame], im_col[im_frame == frame],\
                                             im_line[im_frame == frame], im_chan[im_frame == frame],\
-                                                im_tcspc[im_frame == frame], head, cnum)[0:1]
+                                                im_tcspc[im_frame == frame], head, cnum)
              if frame <= nz and tmptag.size > 0:
-                 tag[:, :, :, frame, cnum] = tmptag
-                 tau[:, :, :, frame, cnum] = tmptau
+                 tag[:, :, :, frame, :] = tmptag
+                 tau[:, :, :, frame, :] = tmptau
 
              head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
              head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime']
