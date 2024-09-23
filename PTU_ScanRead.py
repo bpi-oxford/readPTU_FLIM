@@ -11,7 +11,9 @@ import matplotlib.pyplot as plt
 import sys
 import time
 import pickle
-from numba import njit 
+from tqdm import tqdm
+from fast_histogram import histogramdd   
+# from numba import njit 
 
 #%%
 
@@ -454,12 +456,18 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolut
             ind = (im_chan == dind[ch]) & (im_tcspc<tmpCh/cnum*(p+1)) & (im_tcspc>=p*tmpCh/cnum)
             idx = np.where(ind)[0]
             # print(len(idx))
-            tcspc_pix[:, :, :, ch*cnum + p] = mHist3(im_line[idx].astype(np.int64), 
+            # tcspc_pix[:, :, :, ch*cnum + p] = mHist3(im_line[idx].astype(np.int64), 
+            #                             im_col[idx].astype(np.int64), 
+            #                             (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv), 
+            #                             np.arange(nx), 
+            #                             np.arange(ny), 
+            #                             np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
+            
+            tcspc_pix[:, :, :, ch*cnum + p] = histogramdd((im_line[idx].astype(np.int64), 
                                         im_col[idx].astype(np.int64), 
-                                        (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv), 
-                                        np.arange(nx), 
-                                        np.arange(ny), 
-                                        np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
+                                        (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv)), 
+                                        (nx, ny, Ngate),
+                                        [(0,nx-1),(0,ny-1),(0,Ngate-1)])  # tcspc histograms for all the pixels at once!
         
            
             tag[:, :, ch, p] = np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2)
@@ -543,7 +551,7 @@ def mHist2(x, y, xv=None, yv=None):
 
     return h, xv, yv
 
-@njit
+# @njit
 def mHist3(x, y, z, xv=None, yv=None, zv=None):
     # x = np.asarray(x).flatten()
     # y = np.asarray(y).flatten()
@@ -592,9 +600,9 @@ def mHist3(x, y, z, xv=None, yv=None, zv=None):
         zmin, zmax = zv[0], zv[-1]
 
         # clipping
-        x = np.clip(x, xmin, xmax)
-        y = np.clip(y, ymin, ymax)
-        z = np.clip(z, zmin, zmax)
+        x = np.clip(x, xmin, xmax, out = x, casting='unsafe')
+        y = np.clip(y, ymin, ymax, out = y, casting='unsafe')
+        z = np.clip(z, zmin, zmax, out = z, casting='unsafe')
 
         # Handling for x
         if (np.sum(np.diff(np.diff(xv))) == 0):
@@ -628,9 +636,12 @@ def mHist3(x, y, z, xv=None, yv=None, zv=None):
 
 
     # Initialize the histogram array
-    h = np.zeros(len(xv)* len(yv)* len(zv), dtype=int)
+    # h = np.zeros(len(xv)* len(yv)* len(zv), dtype=int)
+    h = np.zeros((len(xv), len(yv), len(zv)), dtype=int)
+    
     num = np.sort(x + xmax * y + xmax * ymax * z)
-    np.add.at(h, num, 1)
+    # np.add.at(h, num, 1)
+    np.add.at(h.ravel(), num, 1)
     # h[num]=1
     
     tmp = np.diff((np.diff(np.concatenate(([-1],num,[-1])))==0).astype(int))
@@ -638,15 +649,18 @@ def mHist3(x, y, z, xv=None, yv=None, zv=None):
 
     ind = np.arange(len(num))
     # Calculate the flattened indices for the histogram
-    h[num[tmp==1]] += -ind[tmp==1] + ind[tmp==-1]
+    # h[num[tmp==1]] += -ind[tmp==1] + ind[tmp==-1]
     
 
     # Increment the histogram at the calculated indices
-    h = h.reshape((len(xv), len(yv), len(zv)), order='F')
+    
+    # h = h.reshape((len(xv), len(yv), len(zv)), order='F')
+    h.ravel()[num[tmp == 1]] += -ind[tmp == 1] + ind[tmp == -1]
 
     return h, xv, yv, zv
 
-@njit
+
+# @njit
 def mHist4(x, y, z, t, xv=None, yv=None, zv=None, tv=None):
     # Convert inputs to flattened arrays
     x = np.asarray(x).ravel()
@@ -1544,8 +1558,9 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         im_line = np.asarray(im_line)
         im_chan = np.asarray(im_chan)
         im_tcspc = np.asarray(im_tcspc)
-        print('Processing Frames')
-        for frame in range(np.max(im_frame)):
+        # print('Processing Frames')
+        
+        for frame in tqdm(range(np.max(im_frame)),desc= 'Processing Frames:'):
             tmptag, tmptau,_ = Process_Frame(im_sync[im_frame == frame],im_col[im_frame == frame],\
                                              im_line[im_frame == frame],im_chan[im_frame == frame],\
                                                  im_tcspc[im_frame == frame],head, cnum, resolution = 0.2)
@@ -1577,9 +1592,9 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                             np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
             
                
-                tag[:, :, ch, p] = np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2)
-                tau[:, :, ch, p] = np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (tag[:, :, ch, p] + 10**-10)) -
-                                                (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (tag[:, :, ch, p] + 10**-10)) ** 2))
+                tag[:, :, ch, p] = np.expand_dims(np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2), axis = -1)
+                tau[:, :, ch, p] = np.expand_dims(np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tag[:, :, ch, p], axis = -1) + 10**-10)) -
+                                                (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tag[:, :, ch, p], axis =-1) + 10**-10)) ** 2)), axis = -1)
                 timeF[ch*cnum + p] = np.round(im_sync[idx] / SyncRate / Resolution / 1e-9) + im_tcspc[idx].astype(np.int64)  # in tcspc bins 
                 
         # for ch in range(maxch_n):
@@ -2017,9 +2032,9 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                             np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
             
                
-                tags[:, :, ch, p] = np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2)
-                taus[:, :, ch, p] = np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (tags[:, :, ch, p] + 10**-10)) -
-                                                (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (tags[:, :, ch, p] + 10**-10)) ** 2))
+                tag[:, :, ch, p] = np.expand_dims(np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2), axis = -1)
+                tau[:, :, ch, p] = np.expand_dims(np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tag[:, :, ch, p], axis = -1) + 10**-10)) -
+                                               (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tag[:, :, ch, p], axis =-1) + 10**-10)) ** 2)), axis = -1)
                 timeF[ch*cnum + p] = np.round(im_sync[idx] / SyncRate / Resolution / 1e-9) + im_tcspc[idx].astype(np.int64)  # in tcspc bins 
                 
             
