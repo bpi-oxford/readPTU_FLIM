@@ -13,7 +13,8 @@ import time
 import pickle
 from tqdm import tqdm
 # from fast_histogram import histogramdd  
-from mpi4py import MPI 
+# from mpi4py import MPI 
+from multiprocessing import Pool, cpu_count
 # from numba import njit 
 
 #%%
@@ -481,60 +482,114 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolut
     return tag, tau, tcspc_pix
 
 
-def Process_FrameFast(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolution = 0.2):
-    Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
-    chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
-    # SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
-    nx = head['ImgHdr_PixX']
-    ny = head['ImgHdr_PixY']
-    dind = np.unique(im_chan).astype(np.int64)
-    Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * (head['MeasDesc_Resolution'] / Resolution / cnum) * 1e9)
-    tmpCh = np.ceil(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution']) # total number of channels in the original tcspc histogram
-    maxch_n = len(dind)
+# def Process_FrameFast(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolution = 0.2):
 
-    # tcspc_pix = np.zeros((nx, ny, Ngate, maxch_n*cnum), dtype=np.uint32) # X-Y-Tau-CH*Pulse
-    # timeF = [None] * maxch_n*cnum
-    # tag = np.zeros((nx, ny, maxch_n, cnum), dtype=np.uint32) #XYCP
-    # tau = np.zeros((nx, ny, maxch_n, cnum))
+#     Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
+#     chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
+#     # SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
+#     nx = head['ImgHdr_PixX']
+#     ny = head['ImgHdr_PixY']
+#     dind = np.unique(im_chan).astype(np.int64)
+#     Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * (head['MeasDesc_Resolution'] / Resolution / cnum) * 1e9)
+#     tmpCh = np.ceil(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution']) # total number of channels in the original tcspc histogram
+#     maxch_n = len(dind)
 
-    # the program currently divides the tcspc bins equally into cnum windows starting from 0th bin. 
-    # A sophisticated program such as DetectorTimeGates can be implemented if needed
-    
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()  # Get the rank of this process
-    sizeP = comm.Get_size()  # Get the total number of processes
+#     # tcspc_pix = np.zeros((nx, ny, Ngate, maxch_n*cnum), dtype=np.uint32) # X-Y-Tau-CH*Pulse
+#     # timeF = [None] * maxch_n*cnum
+#     # tag = np.zeros((nx, ny, maxch_n, cnum), dtype=np.uint32) #XYCP
+#     # tau = np.zeros((nx, ny, maxch_n, cnum))
 
-    # Assuming the following arrays/variables are already defined:
-    # im_chan, dind, im_tcspc, tmpCh, cnum, chDiv, im_line, im_col, tcspc_pix, nx, ny, Ngate, maxch_n
+#     # the program currently divides the tcspc bins equally into cnum windows starting from 0th bin. 
+#     # A sophisticated program such as DetectorTimeGates can be implemented if needed
     
-    # Decide to split the workload across the nx dimension
-    chunk_size = nx // sizeP
-    start = rank * chunk_size
-    end = (rank + 1) * chunk_size if rank != sizeP - 1 else nx  # Ensure last process takes the remaining part
+#     comm = MPI.COMM_WORLD
+#     rank = comm.Get_rank()  # Get the rank of this process
+#     sizeP = comm.Get_size()  # Get the total number of processes
+
+#     # Assuming the following arrays/variables are already defined:
+#     # im_chan, dind, im_tcspc, tmpCh, cnum, chDiv, im_line, im_col, tcspc_pix, nx, ny, Ngate, maxch_n
     
-    # Use im_col to filter only the relevant data for this process
-    idx_col = np.where((im_line >= start) & (im_line < end))[0]  # Indices relevant to this process
+#     # Decide to split the workload across the nx dimension
+#     chunk_size = nx // sizeP
+#     start = rank * chunk_size
+#     end = (rank + 1) * chunk_size if rank != sizeP - 1 else nx  # Ensure last process takes the remaining part
     
-    # Filter the other relevant arrays based on idx_col
-    im_line_chunk = im_line[idx_col]
-    im_col_chunk = im_col[idx_col]
-    im_tcspc_chunk = im_tcspc[idx_col]
-    im_chan_chunk = im_chan[idx_col]
-    im_tcspc_chunk = im_tcspc[idx_col]
+#     # Use im_col to filter only the relevant data for this process
+#     idx_col = np.where((im_line >= start) & (im_line < end))[0]  # Indices relevant to this process
     
-    # Initialize a zero array for this process's chunk of tcspc_pix
+#     # Filter the other relevant arrays based on idx_col
+#     im_line_chunk = im_line[idx_col]
+#     im_col_chunk = im_col[idx_col]
+#     im_tcspc_chunk = im_tcspc[idx_col]
+#     im_chan_chunk = im_chan[idx_col]
+#     im_tcspc_chunk = im_tcspc[idx_col]
+    
+#     # Initialize a zero array for this process's chunk of tcspc_pix
+#     tcspc_pix_chunk = np.zeros((end - start, ny, Ngate, maxch_n * cnum), dtype=np.int64)
+#     tag_chunk = np.zeros((end - start, ny, maxch_n, cnum), dtype=np.float64)
+#     tau_chunk = np.zeros((end - start, ny, maxch_n, cnum), dtype=np.float64)
+#     binT = np.transpose(np.tile(np.arange(Ngate).reshape(-1, 1, 1) * Resolution, (1, end - start, ny)), (1, 2, 0))  # 3D time axis
+      
+    
+#     for ch in range(maxch_n):
+#         for p in range(cnum):
+#             ind = (im_chan_chunk == dind[ch]) & (im_tcspc_chunk<tmpCh/cnum*(p+1)) & (im_tcspc_chunk>=p*tmpCh/cnum)
+#             idx = np.where(ind)[0]
+#             # print(len(idx))
+#             # Compute the histograms for the chunk of pixels this process is responsible for (i.e., along the nx dimension)
+#             tcspc_pix_chunk[:, :, :, ch * cnum + p] = mHist3(
+#                 im_line_chunk[idx].astype(np.int64),
+#                 im_col_chunk[idx].astype(np.int64),
+#                 (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p * tmpCh / cnum / chDiv),
+#                 np.arange(start, end),  # The nx range handled by this process
+#                 np.arange(ny),
+#                 np.arange(Ngate)
+#                 )[0]  # tcspc histograms for the current chunk of pixels
+            
+#             tag_chunk[:, :, ch, p] = np.sum(tcspc_pix_chunk[:, :, :, ch * cnum + p], axis=2)
+#             tau_chunk[:, :, ch, p] = np.real(np.sqrt(
+#                 (np.sum(binT ** 2 * tcspc_pix_chunk[:, :, :, ch * cnum + p], axis=2) / (tag_chunk[:, :, ch, p] + 1e-10)) -
+#                 (np.sum(binT * tcspc_pix_chunk[:, :, :, ch * cnum + p], axis=2) / (tag_chunk[:, :, ch, p] + 1e-10)) ** 2
+#                 ))
+    
+#     if rank == 0:
+#         # Allocate the final arrays on the root process
+#         tcspc_pix = np.zeros((nx, ny, Ngate, maxch_n * cnum), dtype=np.int64)
+#         tag = np.zeros((nx, ny, maxch_n, cnum), dtype=np.float64)
+#         tau = np.zeros((nx, ny, maxch_n, cnum), dtype=np.float64)
+        
+#     # Use MPI_Gather to gather all the chunks for tcspc_pix_chunk
+#     comm.Gather(tcspc_pix_chunk, tcspc_pix if rank == 0 else None, root=0)
+
+#     # Use MPI_Gather to gather all the chunks for tag_chunk and tau_chunk
+#     comm.Gather(tag_chunk, tag if rank == 0 else None, root=0)
+#     comm.Gather(tau_chunk, tau if rank == 0 else None, root=0)
+    
+#     if rank == 0:
+#         # Now the root process (rank 0) has the complete tcspc_pix, tag, and tau arrays
+#         print("Computation completed and gathered on rank 0.")
+            
+#         return tag, tau, tcspc_pix
+#     else: 
+#         return None, None, None
+def process_chunk(chunk_data):
+    # Unpack the chunk data
+    im_sync_chunk, im_col_chunk, im_line_chunk, im_chan_chunk,\
+        im_tcspc_chunk, head, cnum, start, end, Resolution, chDiv,\
+            dind, tmpCh, Ngate, maxch_n, ny = chunk_data
+    
+    # Initialize arrays for this chunk
     tcspc_pix_chunk = np.zeros((end - start, ny, Ngate, maxch_n * cnum), dtype=np.int64)
     tag_chunk = np.zeros((end - start, ny, maxch_n, cnum), dtype=np.float64)
     tau_chunk = np.zeros((end - start, ny, maxch_n, cnum), dtype=np.float64)
     binT = np.transpose(np.tile(np.arange(Ngate).reshape(-1, 1, 1) * Resolution, (1, end - start, ny)), (1, 2, 0))  # 3D time axis
-      
     
     for ch in range(maxch_n):
         for p in range(cnum):
-            ind = (im_chan_chunk == dind[ch]) & (im_tcspc_chunk<tmpCh/cnum*(p+1)) & (im_tcspc_chunk>=p*tmpCh/cnum)
+            ind = (im_chan_chunk == dind[ch]) & (im_tcspc_chunk < tmpCh / cnum * (p + 1)) & (im_tcspc_chunk >= p * tmpCh / cnum)
             idx = np.where(ind)[0]
-            # print(len(idx))
-            # Compute the histograms for the chunk of pixels this process is responsible for (i.e., along the nx dimension)
+            
+            # Compute the histograms for the chunk of pixels
             tcspc_pix_chunk[:, :, :, ch * cnum + p] = mHist3(
                 im_line_chunk[idx].astype(np.int64),
                 im_col_chunk[idx].astype(np.int64),
@@ -542,33 +597,53 @@ def Process_FrameFast(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, res
                 np.arange(start, end),  # The nx range handled by this process
                 np.arange(ny),
                 np.arange(Ngate)
-                )[0]  # tcspc histograms for the current chunk of pixels
-            
+            )[0]  # tcspc histograms for the current chunk of pixels
+
             tag_chunk[:, :, ch, p] = np.sum(tcspc_pix_chunk[:, :, :, ch * cnum + p], axis=2)
             tau_chunk[:, :, ch, p] = np.real(np.sqrt(
                 (np.sum(binT ** 2 * tcspc_pix_chunk[:, :, :, ch * cnum + p], axis=2) / (tag_chunk[:, :, ch, p] + 1e-10)) -
                 (np.sum(binT * tcspc_pix_chunk[:, :, :, ch * cnum + p], axis=2) / (tag_chunk[:, :, ch, p] + 1e-10)) ** 2
-                ))
-    
-    if rank == 0:
-        # Allocate the final arrays on the root process
-        tcspc_pix = np.zeros((nx, ny, Ngate, maxch_n * cnum), dtype=np.int64)
-        tag = np.zeros((nx, ny, maxch_n, cnum), dtype=np.float64)
-        tau = np.zeros((nx, ny, maxch_n, cnum), dtype=np.float64)
-        
-    # Use MPI_Gather to gather all the chunks for tcspc_pix_chunk
-    comm.Gather(tcspc_pix_chunk, tcspc_pix, root=0)
-    
-    # Use MPI_Gather to gather all the chunks for tag_chunk and tau_chunk
-    comm.Gather(tag_chunk, tag, root=0)
-    comm.Gather(tau_chunk, tau, root=0)
-    
-    if rank == 0:
-        # Now the root process (rank 0) has the complete tcspc_pix, tag, and tau arrays
-        print("Computation completed and gathered on rank 0.")
-            
-    return tag, tau, tcspc_pix
+            ))
 
+    return tag_chunk, tau_chunk, tcspc_pix_chunk
+
+def Process_FrameFast(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum=1, resolution=0.2):
+    Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
+    chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
+    nx = head['ImgHdr_PixX']
+    ny = head['ImgHdr_PixY']
+    dind = np.unique(im_chan).astype(np.int64)
+    Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * (head['MeasDesc_Resolution'] / Resolution / cnum) * 1e9)
+    tmpCh = np.ceil(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'])  # total number of channels in the original tcspc histogram
+    maxch_n = len(dind)
+
+    # Number of processes to use (you can adjust this based on your CPU)
+    num_processes = min(cpu_count(), 6)  # Use up to 4 processes or less depending on available cores
+
+    # Split the nx dimension into chunks for each process
+    chunk_size = nx // num_processes
+    chunks = [(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum, i * chunk_size,
+               (i + 1) * chunk_size if i != num_processes - 1 else nx, Resolution, chDiv, dind, tmpCh, Ngate, maxch_n, ny)
+              for i in range(num_processes)]
+    
+    # Initialize the multiprocessing pool
+    with Pool(processes=num_processes) as pool:
+        # Distribute the work across processes
+        results = pool.map(process_chunk, chunks)
+
+    # Gather the results
+    tcspc_pix = np.zeros((nx, ny, Ngate, maxch_n * cnum), dtype=np.int64)
+    tag = np.zeros((nx, ny, maxch_n, cnum), dtype=np.float64)
+    tau = np.zeros((nx, ny, maxch_n, cnum), dtype=np.float64)
+
+    for i, (tag_chunk, tau_chunk, tcspc_pix_chunk) in enumerate(results):
+        start = i * chunk_size
+        end = (i + 1) * chunk_size if i != num_processes - 1 else nx
+        tcspc_pix[start:end, :, :, :] = tcspc_pix_chunk
+        tag[start:end, :, :, :] = tag_chunk
+        tau[start:end, :, :, :] = tau_chunk
+
+    return tag, tau, tcspc_pix
 
 def mHist2(x, y, xv=None, yv=None):
     x = np.asarray(x).ravel()
@@ -1654,10 +1729,11 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         # print('Processing Frames')
         
         for frame in tqdm(range(np.max(im_frame)),desc= 'Processing Frames:'):
+            print('Fast')
             tmptag, tmptau,_ = Process_FrameFast(im_sync[im_frame == frame],im_col[im_frame == frame],\
                                              im_line[im_frame == frame],im_chan[im_frame == frame],\
                                                  im_tcspc[im_frame == frame],head, cnum, resolution = 0.2)
-            if tmptag.size > 0:
+            if tmptag is not None and tmptag.size > 0:
                 tag[:,:,:,frame, :] = tmptag
                 tau[:,:,:,frame, :] = tmptau
         
