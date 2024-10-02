@@ -539,6 +539,9 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
         p 	     = 	Time between laser exciation pulses (in nanoseconds)
         dt 	     = 	Time width of one TCSPC channel (in nanoseconds)
         shift	 =	boundaries of colorshift in TCSPC channels
+        N        =  Number of trial lifetime values for estimating the distribution
+        scattering = Flag for including irf as well in the estimation
+        
         
         The return parameters are:
         cx	     =	lifetime distribution
@@ -590,10 +593,103 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
     else:
         csh = shmin
         
-        M = (1 - csh + np.int_(csh)) * M0[(t - np.int_(csh) - 1) % n,:] + \
-             (csh - np.int_(csh)) * M0[(t - int(np.ceil(csh)) - 1) % n,:]
+    M = (1 - csh + np.int_(csh)) * M0[(t - np.int_(csh) - 1) % n,:] + \
+          (csh - np.int_(csh)) * M0[(t - int(np.ceil(csh)) - 1) % n,:]
+    c = np.ceil(np.abs(csh))*np.sign(csh)
+    ind = np.arange(np.max([0,c]),np.min([n,n+c])).astype(np.int32) 
+    cx,_ = PIRLSnonneg(M[ind,:],y[ind])
+    z = M @ cx
+    err = np.sum((z-y+TINY)**2/np.abs(z+TINY)/len(ind))
+    
+    if bild is not None:
+        t = dt * t
         
+        # First plot: semilogarithmic plot of y and z
+        plt.figure()
+        plt.semilogy(t, y, 'ob', linewidth=1, label='y data')
+        plt.semilogy(t, z, 'r', linewidth=2, label='z data')
+        plt.xlabel('time [ns]')
+        plt.ylabel('lg count')
         
+        # Adjusting axis limits
+        v = [min(t), max(t)]
+        plt.axis([v[0], v[1], None, None])
+        plt.legend()
+        plt.show()
+        
+        # Second figure: Weighted residuals
+        plt.figure()
+        plt.subplot(2, 1, 1)
+        plt.plot(t, (y - z) / np.sqrt(z))
+        plt.xlabel('time [ns]')
+        plt.ylabel('weighted residual')
+        
+        # Adjust axis limits
+        v = [min(t), max(t)]
+        plt.axis([v[0], v[1], None, None])
+        
+        # Calculate fac and tau for next plot
+        ind = np.arange(len(cx) - 2)
+        len_ind = len(ind)
+        tau = 1.0 / tau  # Reciprocal of tau
+        fac = np.sqrt(np.dot(tau[:-1], 1.0/tau[1:]))
+
+        
+        # Subplot for distribution
+        plt.subplot(2, 1, 2)
+        x_vals = np.reshape([fac * tau[ind], fac * tau[ind], tau[ind] / fac, tau[ind]], (4 * len_ind, 1))
+        y_vals = np.reshape([0 * tau[ind], cx[ind + 1], cx[ind + 1], 0 * tau[ind]], (4 * len_ind, 1))
+        
+        # Semilogarithmic plot with patch-like behavior
+        plt.semilogx(x_vals, y_vals)
+        plt.fill_between(x_vals.flatten(), y_vals.flatten(), color='b', alpha=0.3)
+        plt.xlabel('decay time [ns]')
+        plt.ylabel('distribution')
+        plt.show()
+     
+
+    offset = cx[0]
+    cx = cx[1:]
+    
+    if flag >0:
+       tmp = cx>0.1*np.max(cx)
+       t = np.arange(len(tmp))
+       # Find rising and falling edges
+       t1 = t[1:][tmp[1:] > tmp[:-1]]
+       t2 = t[:-1][tmp[:-1] > tmp[1:]]
+       
+       # Adjust t1 and t2 based on conditions
+       if t1[0] > t2[0]:
+           t2 = t2[1:]
+       
+       if t1[-1] > t2[-1]:
+           t1 = t1[:-1]
+       
+       if len(t1) == len(t2) + 1:
+           t1 = t1[:-1]
+       
+       if len(t2) == len(t1) + 1:
+           t2 = t2[1:]
+       
+       # Initialize tmp and bla as empty lists
+       tmp_list = []
+       bla = []
+       
+       # Process intervals between t1 and t2
+       for j in range(len(t1)):
+           interval_sum = np.sum(cx[t1[j]:t2[j]])
+           weighted_sum = cx[t1[j]:t2[j]] * tau[t1[j]:t2[j]] / interval_sum
+           
+           tmp_list.extend(weighted_sum)
+           bla.append(interval_sum)
+       
+       # Normalize cx and tau
+       cx = np.array(bla) / np.array(tmp_list)
+       cx = cx / np.sum(cx)
+       tau = np.array(tmp_list)
+    
+    return cx, tau, offset, csh, z, t, err 
+            
             
 
 def FluoFit(irf, y, p, dt, tau, lim = None, init = None, flag_ml = True, plt_flag = 1):

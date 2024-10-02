@@ -61,6 +61,7 @@ param_grid = {
 }
 params = list(ParameterGrid(param_grid))
 
+#%%
 for nz in range(nFrames):
     ind = np.where(im_frame == nz)[0]
   

@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """
+Created on Tue Oct  1 23:11:52 2024
+
+@author: narai
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Created on Fri Aug 23 16:46:33 2024
 
 @author: narai
@@ -12,10 +19,10 @@ import sys
 import time
 import pickle
 from tqdm import tqdm
-from fast_histogram import histogramdd  
+# from fast_histogram import histogramdd  
 # from mpi4py import MPI 
 from multiprocessing import Pool, cpu_count
-from numba import njit 
+# from numba import njit 
 
 #%%
 
@@ -460,7 +467,7 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolut
             ind = (im_chan == dind[ch]) & (im_tcspc<tmpCh/cnum*(p+1)) & (im_tcspc>=p*tmpCh/cnum)
             idx = np.where(ind)[0]
             # print(len(idx))
-            tcspc_pix[:, :, :, ch*cnum + p] = mHist3_v2(im_line[idx].astype(np.int64), 
+            tcspc_pix[:, :, :, ch*cnum + p] = mHist3(im_line[idx].astype(np.int64), 
                                         im_col[idx].astype(np.int64), 
                                         (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv), 
                                         np.arange(nx), 
@@ -572,6 +579,32 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolut
 #         return tag, tau, tcspc_pix
 #     else: 
 #         return None, None, None
+
+def Frame_update(tmptag, tmptau, tcspc, chan, line, col, head, cnum):
+    Resolution = head['MeasDesc_Resolution'] * 1e9  # resolution of 0.256 ns to calculate average lifetimes
+    dind = np.unique(chan).astype(np.int64)
+    tmpCh = np.ceil(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'])  # total number of channels in the original tcspc histogram
+    maxch_n = len(dind)
+    
+    
+    for ch in range(maxch_n):
+        for p in range(cnum):
+            for y in range(head['ImgHdr_PixY']):
+                ind = (chan == dind[ch]) & \
+                    (tcspc < tmpCh / cnum * (p + 1)) & \
+                    (tcspc >= p * tmpCh / cnum) & \
+                    (col == y)
+                            
+                idx = np.where(ind)[0]
+                # print(len(idx))
+                tmptag[line, y, ch, p] = len(idx)
+                if len(idx)>2:
+                    tmptau[line, y, ch, p] = np.sqrt(np.var(tcspc[idx].astype(np.int64) - int(p * tmpCh / cnum )))*Resolution
+    return tmptag, tmptau        
+            
+
+    
+
 def process_chunk(chunk_data):
     # Unpack the chunk data
     im_sync_chunk, im_col_chunk, im_line_chunk, im_chan_chunk,\
@@ -589,26 +622,16 @@ def process_chunk(chunk_data):
             ind = (im_chan_chunk == dind[ch]) & (im_tcspc_chunk < tmpCh / cnum * (p + 1)) & (im_tcspc_chunk >= p * tmpCh / cnum)
             idx = np.where(ind)[0]
             
-            # # Compute the histograms for the chunk of pixels
-            # tcspc_pix_chunk[:, :, :, ch * cnum + p] = mHist3_v2(
-            #     im_line_chunk[idx].astype(np.int64),
-            #     im_col_chunk[idx].astype(np.int64),
-            #     (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p * tmpCh / cnum / chDiv),
-            #     np.arange(start, end),  # The nx range handled by this process
-            #     np.arange(ny),
-            #     np.arange(Ngate)
-            # )[0]  # tcspc histograms for the current chunk of pixels
-            
-            
-            
-            tcspc_pix_chunk[:, :, :, ch*cnum + p] = histogramdd((im_line_chunk[idx].astype(np.int64), 
-                                        im_col_chunk[idx].astype(np.int64), 
-                                        (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv)), 
-                                        (end-start, ny, Ngate),
-                                        [(start,end-1),(0,ny-1),(0,Ngate-1)])  # tcspc histograms for all the pixels at once!
-        
-        
-        
+            # Compute the histograms for the chunk of pixels
+            tcspc_pix_chunk[:, :, :, ch * cnum + p] = mHist3(
+                im_line_chunk[idx].astype(np.int64),
+                im_col_chunk[idx].astype(np.int64),
+                (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p * tmpCh / cnum / chDiv),
+                np.arange(start, end),  # The nx range handled by this process
+                np.arange(ny),
+                np.arange(Ngate)
+            )[0]  # tcspc histograms for the current chunk of pixels
+
             tag_chunk[:, :, ch, p] = np.sum(tcspc_pix_chunk[:, :, :, ch * cnum + p], axis=2)
             tau_chunk[:, :, ch, p] = np.real(np.sqrt(
                 (np.sum(binT ** 2 * tcspc_pix_chunk[:, :, :, ch * cnum + p], axis=2) / (tag_chunk[:, :, ch, p] + 1e-10)) -
@@ -629,7 +652,7 @@ def Process_FrameFast(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum=1,
 
     # Number of processes to use (you can adjust this based on your CPU)
     num_processes = min(cpu_count(), 6)  # Use up to 4 processes or less depending on available cores
-    
+
     # Split the nx dimension into chunks for each process
     chunk_size = nx // num_processes
     chunks = [(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum, i * chunk_size,
@@ -728,69 +751,6 @@ def mHist2(x, y, xv=None, yv=None):
     h = h.reshape((len(xv), len(yv)), order='F')
 
     return h, xv, yv
-
-def mHist3_v2(x, y, z, xv=None, yv=None, zv=None):
-    # Convert inputs to arrays and flatten them
-    x = np.asarray(x).ravel()
-    y = np.asarray(y).ravel()
-    z = np.asarray(z).ravel()
-    
-    # Remove non-finite values
-    ind = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
-    x = x[ind]
-    y = y[ind]
-    z = z[ind]
-
-    # Handle optional arguments and compute bin edges
-    if xv is None or yv is None or zv is None:
-        # Default number of bins
-        NX, NY, NZ = 100, 100, 100
-        xmin, xmax = x.min(), x.max()
-        ymin, ymax = y.min(), y.max()
-        zmin, zmax = z.min(), z.max()
-        xv = np.linspace(xmin, xmax, NX + 1)
-        yv = np.linspace(ymin, ymax, NY + 1)
-        zv = np.linspace(zmin, zmax, NZ + 1)
-    else:
-        xv = np.asarray(xv)
-        yv = np.asarray(yv)
-        zv = np.asarray(zv)
-
-    # Clip the data to the bin edges
-    x = np.clip(x, xv[0], xv[-1])
-    y = np.clip(y, yv[0], yv[-1])
-    z = np.clip(z, zv[0], zv[-1])
-
-    # Call the Numba-optimized histogram function
-    h = compute_histogram(x, y, z, xv, yv, zv)
-
-    return h, xv, yv, zv
-
-@njit
-def compute_histogram(x, y, z, xv, yv, zv):
-    nx = len(xv) 
-    ny = len(yv) 
-    nz = len(zv)
-    h = np.zeros((nx, ny, nz), dtype=np.int64)
-
-    for i in range(len(x)):
-        # Find the bin index for each dimension
-        xi = x[i]
-        yi = y[i]
-        zi = z[i]
-        
-        xi_bin = np.searchsorted(xv, xi, side='right')
-        yi_bin = np.searchsorted(yv, yi, side='right')
-        zi_bin = np.searchsorted(zv, zi, side='right')
-
-        # Ensure the indices are within the valid range
-        if 0 <= xi_bin < nx and 0 <= yi_bin < ny and 0 <= zi_bin < nz:
-            h[xi_bin, yi_bin, zi_bin] += 1
-
-    return h
-
-
-
 
 
 # @njit
@@ -1551,26 +1511,29 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
             tend = 0
             line = 0 # python compatible
             n_frames = -1
-            f_times = []
+            f_times     = []
             
-            y = []
-            tmpx = []
-            chan = []
-            marker = []
-            dt = np.zeros(ny)
-            
-            im_sync = []
-            im_tcspc = []
-            im_chan = []
-            im_line = []
-            im_col = []
-            im_frame = []
-            Turns1 = []
-            Turns2 = []
+            y           = []
+            tmpx        = []
+            chan        = []
+            marker      = []
+            dt          = np.zeros(ny)
+                
+            im_sync     = []
+            im_tcspc    = []
+            im_chan     = []
+            im_line     = []
+            im_col      = []
+            im_frame    = []
+            Turns1      = []
+            Turns2      = []
+            tag         = []
+            tau         = []
             
             
             
             tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons, head)    
+            dind = np.unique(tmp_chan)
             
     
             while num > 0:
@@ -1590,7 +1553,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
     
                 # F = [val for val in y if val and Frame > 0]
                 while len(F)>0:
-    
+
                     if len(F)>0:
                         ind = (y < F[0])
                         idx = np.where(ind)[0]
@@ -1627,6 +1590,8 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                         F = F[1:]
                         line = 0
                         
+                        tmptag = np.zeros((nx,ny,len(dind), cnum))
+                        tmptau = np.zeros_like(tmptag)
                         if len(L2) > 2:
                             n_frames += 1
                             for j in range(0, 2 * (len(L2) // 2 - 1), 2):
@@ -1643,7 +1608,11 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                 im_line.extend(np.uint16([line] * np.sum(ind)))
                                 im_col.extend(np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1))))
                                 
-                                
+                                tmptag, tmptau = Frame_update(tmptag, tmptau, np.uint16(f_x[idx]), \
+                                                              np.uint8(f_ch[idx]), \
+                                                              np.uint16(line), \
+                                                              np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1))), \
+                                                              head, cnum)
                                 
                                 # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
                                 # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
@@ -1671,6 +1640,12 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                 im_line.extend(np.uint16([line] * np.sum(ind)))
                                 im_col.extend(np.uint16(nx - np.floor(nx * (f_y[idx] - t1) / (t2 - t1))))
                                 
+                                tmptag, tmptau = Frame_update(tmptag, tmptau, np.uint16(f_x[idx]), \
+                                                              np.uint8(f_ch[idx]), \
+                                                              np.uint16(line), \
+                                                              np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1))), \
+                                                              head, cnum)
+                                    
                                 # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
                                 # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
                                 # im_tcspc[cn_phot:cn_phot + n_phot ] = np.uint16(f_x[idx])
@@ -1684,7 +1659,8 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                 
                                 L1 = L1[2:]
                                 L2 = L2[2:]
-
+                        tag.append(tmptag)
+                        tau.append(tmptau)
     
                 tmp_sync, tmp_tcspc, tmp_chan, tmp_special, num, loc = ptu_reader.get_photon_chunk(cnt+1, photons, head)   
                 
@@ -1730,6 +1706,9 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                 L2 = L2[:ny - line ]
     
             if len(L2) > 2:
+                tmptag = np.zeros((nx,ny,len(dind), cnum))
+                tmptau = np.zeros_like(tmptag)
+                
                 for j in range(0, 2 * (len(L2) // 2 - 1), 2):
                     t1 = L1[0]
                     t2 = L2[0]
@@ -1744,7 +1723,11 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                     im_line.extend( np.uint16(line))
                     im_col.extend(np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1))))
                     
-                    
+                    tmptag, tmptau = Frame_update(tmptag, tmptau, np.uint16(f_x[idx]), \
+                                                  np.uint8(f_ch[idx]), \
+                                                  np.uint16(line), \
+                                                  np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1))), \
+                                                  head, cnum)
                     
                     # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
                     # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
@@ -1772,6 +1755,11 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                     im_line.extend( np.uint16(line))
                     im_col.extend(np.uint16(nx - np.floor(nx * (f_y[idx] - t1) / (t2 - t1))))
                     
+                    tmptag, tmptau = Frame_update(tmptag, tmptau, np.uint16(f_x[idx]), \
+                                                  np.uint8(f_ch[idx]), \
+                                                  np.uint16(line), \
+                                                  np.uint16(np.floor(nx * (f_y[idx] - t1) / (t2 - t1))), \
+                                                  head, cnum)
                     # im_frame[cn_phot:cn_phot + n_phot ] = np.uint16([n_frames] * np.sum(ind))
                     # im_sync[cn_phot:cn_phot + n_phot ] = f_y[idx]
                     # im_tcspc[cn_phot:cn_phot + n_phot ] = np.uint16(f_x[idx])
@@ -1785,35 +1773,35 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                     
                     L1 = L1[2:]
                     L2 = L2[2:]
-
+                tag.append(tmptag)
+                tau.appent(tmptau)
 
         head['ImgHdr_FrameTime'] = 1e9 * np.mean(np.diff(f_times)) / head['TTResult_SyncRate']
         head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
         head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime'] / n_frames
         
-        dind = np.unique(im_chan)
-        tag = np.zeros((nx,ny,len(dind),np.max(im_frame)+1, cnum))
-        tau = np.copy(tag)
+        # dind = np.unique(im_chan)
+        # tag = np.zeros((nx,ny,len(dind),np.max(im_frame)+1, cnum))
+        # tau = np.copy(tag)
         im_frame = np.asarray(im_frame)
         im_col = np.asarray(im_col)
         im_sync = np.asarray(im_sync)
         im_line = np.asarray(im_line)
         im_chan = np.asarray(im_chan)
         im_tcspc = np.asarray(im_tcspc)
+        
+        tag = np.transpoer(np.asarray(tag),(1,2,3,0,4)) # xyctp
+        tau = np.transpoer(np.asarray(tau),(1,2,3,0,4)) # xyctp
         # print('Processing Frames')
         
-        for frame in tqdm(range(np.max(im_frame)),desc= 'Processing Frames:'):
-            print('Fast')
-            tmptag, tmptau,_ = Process_FrameFast(im_sync[im_frame == frame],im_col[im_frame == frame],\
-                                              im_line[im_frame == frame],im_chan[im_frame == frame],\
-                                                  im_tcspc[im_frame == frame],head, cnum, resolution = 0.2)
-            # print('Slow')
-            # tmptag, tmptau,_ = Process_Frame(im_sync[im_frame == frame],im_col[im_frame == frame],\
-            #                                  im_line[im_frame == frame],im_chan[im_frame == frame],\
-            #                                      im_tcspc[im_frame == frame],head, cnum, resolution = 0.2)
-            if tmptag is not None and tmptag.size > 0:
-                tag[:,:,:,frame, :] = tmptag
-                tau[:,:,:,frame, :] = tmptau
+        # for frame in tqdm(range(np.max(im_frame)),desc= 'Processing Frames:'):
+        #     print('Fast')
+        #     tmptag, tmptau,_ = Process_FrameFast(im_sync[im_frame == frame],im_col[im_frame == frame],\
+        #                                      im_line[im_frame == frame],im_chan[im_frame == frame],\
+        #                                          im_tcspc[im_frame == frame],head, cnum, resolution = 0.2)
+        #     if tmptag is not None and tmptag.size > 0:
+        #         tag[:,:,:,frame, :] = tmptag
+        #         tau[:,:,:,frame, :] = tmptau
         
         SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
         maxch_n = len(dind)
