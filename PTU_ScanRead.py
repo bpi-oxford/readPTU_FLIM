@@ -1786,7 +1786,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                     L1 = L1[2:]
                     L2 = L2[2:]
 
-
+#%%
         head['ImgHdr_FrameTime'] = 1e9 * np.mean(np.diff(f_times)) / head['TTResult_SyncRate']
         head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
         head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime'] / n_frames
@@ -1839,9 +1839,9 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                             np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
             
                
-                tag[:, :, ch, p] = np.expand_dims(np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2), axis = -1)
-                tau[:, :, ch, p] = np.expand_dims(np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tag[:, :, ch, p], axis = -1) + 10**-10)) -
-                                                (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tag[:, :, ch, p], axis =-1) + 10**-10)) ** 2)), axis = -1)
+                tags[:, :, ch, p] = np.expand_dims(np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2), axis = -1)
+                taus[:, :, ch, p] = np.expand_dims(np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tags[:, :, ch, p], axis = -1) + 10**-10)) -
+                                                (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tags[:, :, ch, p], axis =-1) + 10**-10)) ** 2)), axis = -1)
                 timeF[ch*cnum + p] = np.round(im_sync[idx] / SyncRate / Resolution / 1e-9) + im_tcspc[idx].astype(np.int64)  # in tcspc bins 
                 
         # for ch in range(maxch_n):
@@ -1858,7 +1858,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         #     taus[:, :, ch] = np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch], axis=2) / tags[:, :, ch]) -
         #                                      (np.sum(binT * tcspc_pix[:, :, :, ch], axis=2) / tags[:, :, ch]) ** 2))
             
-            
+ #%%           
         filename = f"{filename[:-4]}_FLIM_data.pkl"
 
         # Create a dictionary to store all variables
