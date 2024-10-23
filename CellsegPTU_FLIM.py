@@ -13,7 +13,7 @@ from tqdm import tqdm
 from plantseg.segmentation.functional.segmentation import mutex_ws
 from PTU_ScanRead import PTU_ScanRead, Process_Frame, mHist2
 import glob
-from FLIM_fitter import Calc_mIRF, FluoFit
+from FLIM_fitter import Calc_mIRF, FluoFit, DistFluoFit
 #%%
 
 filename = r'D:\Collabs\fromYuexuan\Yuexuan_ptu_testfile.ptu'
@@ -174,3 +174,10 @@ for nz in range(nFrames):
     
  # Here comes the plotting of the lifetime values and the amplitudes
             
+ 
+#%%
+
+
+cx, tau, offset, c,_, _, _ = DistFluoFit(np.squeeze(tcspc_cell[0,:]), \
+                               np.floor(head['MeasDesc_GlobalResolution']*10**9/cnum + 0.5), \
+                               resolution, np.squeeze(tcspcIRF) )    

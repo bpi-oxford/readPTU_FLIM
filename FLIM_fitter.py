@@ -583,7 +583,8 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
             M = (1 - c + np.floor(c)) * M0[(t - np.int_(c) - 1) % n,:] + \
                  (c - np.floor(c)) * M0[(t - int(np.ceil(c)) - 1) % n,:]
             ind = np.arange(np.max([0,c]), np.min([n-1,n+c-1])).astype(np.int32)     
-            cx,_ = PIRLSnonneg(M[ind,: ],y[ind],10)
+            # cx,_ = PIRLSnonneg(M[ind,: ],y[ind],10)
+            cx,_ = nnls(M[ind,:],y[ind])
             z = M @ cx
             err = np.concatenate((err, [np.sum((z-y+TINY)**2/np.abs(z+TINY)/len(ind))]))
         shv = np.arange(shmin,shmax+0.1,0.1)
@@ -597,7 +598,8 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
           (csh - np.int_(csh)) * M0[(t - int(np.ceil(csh)) - 1) % n,:]
     c = np.ceil(np.abs(csh))*np.sign(csh)
     ind = np.arange(np.max([0,c]),np.min([n,n+c])).astype(np.int32) 
-    cx,_ = PIRLSnonneg(M[ind,:],y[ind])
+    # cx,_ = PIRLSnonneg(M[ind,:],y[ind])
+    cx,_ = nnls(M[ind,:],y[ind])
     z = M @ cx
     err = np.sum((z-y+TINY)**2/np.abs(z+TINY)/len(ind))
     
@@ -725,7 +727,7 @@ def FluoFit(irf, y, p, dt, tau = None, lim = None,  flag_ml = True, plt_flag = 1
     c = 0 # this will change if colorshift correction is necessary
     
     if tau is None: # get lifetimes guess values from DistFluoFit
-        cx, tau, offset, c = DistFluoFit(y, p, dt, irf)
+        cx, tau, offset, c,_, _, _  = DistFluoFit(y, p, dt, irf)
         cx = np.array(cx).flatten() 
 
         # Identify where cx > 0
