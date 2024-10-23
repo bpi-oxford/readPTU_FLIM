@@ -431,6 +431,10 @@ class PTUreader():
     def get_photon_chunk(self, start_idx, end_idx, head):
        """Get a chunk of photon data from start_idx to end_idx."""
        return self._ptu_read_raw_data([start_idx, end_idx], head)
+
+
+#TODO
+# write HarpTCSPC
     
 def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolution = 0.2):
     Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
@@ -460,7 +464,7 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolut
             ind = (im_chan == dind[ch]) & (im_tcspc<tmpCh/cnum*(p+1)) & (im_tcspc>=p*tmpCh/cnum)
             idx = np.where(ind)[0]
             # print(len(idx))
-            tcspc_pix[:, :, :, ch*cnum + p] = mHist3_v2(im_line[idx].astype(np.int64), 
+            tcspc_pix[:, :, :, ch*cnum + p] = mHist3(im_line[idx].astype(np.int64), 
                                         im_col[idx].astype(np.int64), 
                                         (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv), 
                                         np.arange(nx), 
@@ -590,24 +594,24 @@ def process_chunk(chunk_data):
             idx = np.where(ind)[0]
             
             # # Compute the histograms for the chunk of pixels
-            # tcspc_pix_chunk[:, :, :, ch * cnum + p] = mHist3_v2(
-            #     im_line_chunk[idx].astype(np.int64),
-            #     im_col_chunk[idx].astype(np.int64),
-            #     (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p * tmpCh / cnum / chDiv),
-            #     np.arange(start, end),  # The nx range handled by this process
-            #     np.arange(ny),
-            #     np.arange(Ngate)
-            # )[0]  # tcspc histograms for the current chunk of pixels
+            tcspc_pix_chunk[:, :, :, ch * cnum + p] = mHist3(
+                im_line_chunk[idx].astype(np.int64),
+                im_col_chunk[idx].astype(np.int64),
+                (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p * tmpCh / cnum / chDiv),
+                np.arange(start, end),  # The nx range handled by this process
+                np.arange(ny),
+                np.arange(Ngate)
+            )[0]  # tcspc histograms for the current chunk of pixels
             
             
             
-            tcspc_pix_chunk[:, :, :, ch*cnum + p] = histogramdd((im_line_chunk[idx].astype(np.int64), 
-                                        im_col_chunk[idx].astype(np.int64), 
-                                        (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv)), 
-                                        (end-start, ny, Ngate),
-                                        [(start,end-1),(0,ny-1),(0,Ngate-1)])  # tcspc histograms for all the pixels at once!
+            # tcspc_pix_chunk[:, :, :, ch*cnum + p] = histogramdd((im_line_chunk[idx].astype(np.int64), 
+            #                             im_col_chunk[idx].astype(np.int64), 
+            #                             (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv)), 
+            #                             (end-start, ny, Ngate),
+            #                             [(start,end-1),(0,ny-1),(0,Ngate-1)])  # tcspc histograms for all the pixels at once!
         
-        
+            
         
             tag_chunk[:, :, ch, p] = np.sum(tcspc_pix_chunk[:, :, :, ch * cnum + p], axis=2)
             tau_chunk[:, :, ch, p] = np.real(np.sqrt(
@@ -1575,7 +1579,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
     
             while num > 0:
                 cnt += num
-                tmp_sync += tend
+                tmp_sync += np.uint64(tend)
                 
                 
                 y = np.concatenate((y, tmp_sync))  # Appending selected elements to y

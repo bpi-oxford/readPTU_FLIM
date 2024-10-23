@@ -132,6 +132,9 @@ for nz in range(nFrames):
                                 np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
 
     tcspcIRF = Calc_mIRF(head, np.sum(tcspc_cell,axis=0)[np.newaxis,:,np.newaxis]);
+    tmpi = np.where((tcspcIRF/np.max(tcspcIRF))<(10**-4))[1]
+    tcspcIRF[:,tmpi,:]=0
+    
     
     # we are assuming 3 exponents for each cell in what follows:
     tauCell = np.zeros((ncells,3)) 
@@ -184,8 +187,12 @@ cx, tau, offset, c,_, _, _ = DistFluoFit(np.squeeze(tcspc_cell[0,:]), \
     
     
 #%%
+tmpi = np.where((tcspcIRF/np.max(tcspcIRF))<(10**-4))[1]
+tcspcIRF[:,tmpi,:]=0
 
+#%%
+tau0 = np.array([0.5, 2.0, 5.0]) # initial guesses
 taufit, A, _, _, _, _, _, _, _ = FluoFit(np.squeeze(tcspcIRF), \
-                                         np.squeeze(tcspc_cell[0,:]), \
+                                         np.squeeze(tcspc_cell[2,:]), \
                                          np.floor(head['MeasDesc_GlobalResolution']*10**9/cnum + 0.5), \
-                                         resolution)
+                                         resolution,tau0)

@@ -819,7 +819,7 @@ def FluoFit(irf, y, p, dt, tau = None, lim = None,  flag_ml =  False, plt_flag =
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
         
         ax1.semilogy(t, y, 'bo', label="y")
-        ax1.semilogy(t, z, label="fitted z")
+        ax1.semilogy(t, z, 'r',label="fitted z")
         ax1.semilogy(t,irf/np.max(irf)*np.max(y),'k' ,label = 'irf')
         ax1.legend()
         ax1.set_ylim(bottom=np.min(y)) 
