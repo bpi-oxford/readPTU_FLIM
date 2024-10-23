@@ -724,9 +724,9 @@ def FluoFit(irf, y, p, dt, tau = None, lim = None,  flag_ml = True, plt_flag = 1
     n = len(irf); 
     c = 0 # this will change if colorshift correction is necessary
     
-    if tau is None:
+    if tau is None: # get lifetimes guess values from DistFluoFit
         cx, tau, offset, c = DistFluoFit(y, p, dt, irf)
-        cx = np.array(cx).flatten()
+        cx = np.array(cx).flatten() 
 
         # Identify where cx > 0
         tmp = cx > 0
