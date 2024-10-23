@@ -181,3 +181,11 @@ for nz in range(nFrames):
 cx, tau, offset, c,_, _, _ = DistFluoFit(np.squeeze(tcspc_cell[0,:]), \
                                np.floor(head['MeasDesc_GlobalResolution']*10**9/cnum + 0.5), \
                                resolution, np.squeeze(tcspcIRF) )    
+    
+    
+#%%
+
+taufit, A, _, _, _, _, _, _, _ = FluoFit(np.squeeze(tcspcIRF), \
+                                         np.squeeze(tcspc_cell[0,:]), \
+                                         np.floor(head['MeasDesc_GlobalResolution']*10**9/cnum + 0.5), \
+                                         resolution)

@@ -275,7 +275,7 @@ def Calc_mIRF(head, tcspc):
 
     tau = Resolution * (np.arange(tcspc.shape[1] ) + 0.5)
     IRF = np.zeros(tcspc.shape)
-    nex = 2
+    nex = 3
 
     t0_idx = np.argmax(tcspc, axis=1)
     t0 = tau[min(t0_idx.min(), len(tau) - 1)]
@@ -289,7 +289,7 @@ def Calc_mIRF(head, tcspc):
 
     for PIE in range(tcspc.shape[2]):
 
-        p = np.array([t0, w1, T1, T2, a, b, dt, 1, 2])
+        p = np.array([t0, w1, T1, T2, a, b, dt, 0.5, 1, 6])
         pl = np.array([t0 - 2.5, 1e-3, 1e-4, 1e-4, 1e-5, 1e-5, -0.3] + [0.1] * nex)
         pu = np.array([t0 + 2.5, 1, 1, 1, 0.01, 0.5, 0.5] + [10] * nex)
 
@@ -388,15 +388,17 @@ def PIRLSnonneg(x, y, max_num_iter=10):
     w = np.zeros((n, n))
     
     # Initial guess using non-negative least squares
-    beta_last = lsq_linear(x, y, bounds=(0, np.inf)).x
+    # beta_last = lsq_linear(x, y, bounds=(0, np.inf)).x
+    beta_last,_ = nnls(x,y)
     
     for k in range(max_num_iter):
-        # Update the weight matrix
+        # Update the weight matrix with regularization
         w[np.diag_indices_from(w)] = 1. / np.maximum(x @ beta_last, TINY)
         
-        # Update beta using weighted least squares
+        # Update beta - maximum likelihood solution vector
         xt_w = x.T @ w
-        beta = lsq_linear(xt_w @ x, xt_w @ y, bounds=(0, np.inf)).x
+        # beta = lsq_linear(xt_w @ x, xt_w @ y, bounds=(0, np.inf)).x
+        beta,_ = nnls(xt_w @ x, xt_w @ y)
         
         # Check for convergence
         delta = beta - beta_last
@@ -448,9 +450,10 @@ def MLFit(param, y, irf, p, plt_flag = None):
     z = np.column_stack((np.ones(len(z)), z))
    
     # Perform non-negative least squares to fit A
-    # A = lsq_linear(z, y, bounds=(0, np.inf)).x
-    A,_ = PIRLSnonneg(z,y, 10) 
-    
+    A = lsq_linear(z, y, bounds=(0, np.inf)).x
+    # A,_ = PIRLSnonneg(z,y, 100) 
+    # A,_ = nnls(z,y)
+    # 
     # Recompute z using the estimated coefficients A
     z = z @ A
     
@@ -458,6 +461,7 @@ def MLFit(param, y, irf, p, plt_flag = None):
     ind = y > 0
     err = np.sum(y[ind] * np.log(y[ind] / z[ind]) - y[ind] + z[ind]) / (n - len(tau))
     
+    print(err)
     return err
 
 def LSFit(param, y, irf, p, plt_flag = None):
@@ -506,9 +510,9 @@ def LSFit(param, y, irf, p, plt_flag = None):
     # Add column of ones to z for fitting
     z = np.column_stack((np.ones(len(z)), z))
     # Linear least squares solution for A
-    # A, _, _, _ = lstsq(z, y)
+    A = lsq_linear(z, y, bounds=(0, np.inf)).x
     # A,_ = nnls(z, y)
-    A,_ = PIRLSnonneg(z,y,10)
+    # A,_ = PIRLSnonneg(z,y,10)
     # print(A.shape)
     # Generate fitted curve
     z = z @ A
@@ -523,9 +527,12 @@ def LSFit(param, y, irf, p, plt_flag = None):
         
         
     # Error calculation (Least-squares deviation)
-    TINY = 10**-10
-    err = np.sum((z+TINY - y) ** 2 / np.abs(z+TINY)) / (n - len(tau))
+    # TINY = 10**-10
+    # err = np.sum((z+TINY - y) ** 2 / np.abs(z+TINY)) / (n - len(tau))
+    ind = y > 0
+    err = np.sum(y[ind] * np.log(y[ind] / z[ind]) - y[ind] + z[ind]) / (n - len(tau))
     
+    print(err)
     return err
 
 def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 100, scattering = True):
@@ -694,7 +701,7 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
             
             
 
-def FluoFit(irf, y, p, dt, tau = None, lim = None,  flag_ml = True, plt_flag = 1):
+def FluoFit(irf, y, p, dt, tau = None, lim = None,  flag_ml =  False, plt_flag = 1):
     """
     The function FLUOFIT performs a fit of a multi-exponential decay curve.
     The function arguments are:
@@ -783,8 +790,8 @@ def FluoFit(irf, y, p, dt, tau = None, lim = None,  flag_ml = True, plt_flag = 1
     
     param = np.concatenate(([c], tau)) 
     # ecay times and Offset are assumed to be positive.
-    paramin = np.concatenate(([-1/dt], lim_min))
-    paramax =np.concatenate(([1/dt], lim_max))
+    paramin = np.concatenate(([-2/dt], lim_min))
+    paramax =np.concatenate(([2/dt], lim_max))
     
     if flag_ml is True:
         res = minimize_s(lambda x: MLFit(x, y.astype(np.float64), irf, np.floor(p + 0.5)), param, bounds=list(zip(paramin, paramax)))
@@ -809,9 +816,18 @@ def FluoFit(irf, y, p, dt, tau = None, lim = None,  flag_ml = True, plt_flag = 1
     zz = z*A;
     z = z @ A      
     if plt_flag is not None:
-        plt.semilogy(t, y, 'bo', label="y")
-        plt.semilogy(t, z, label="fitted z")
-        plt.legend()
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
+        
+        ax1.semilogy(t, y, 'bo', label="y")
+        ax1.semilogy(t, z, label="fitted z")
+        ax1.semilogy(t,irf/np.max(irf)*np.max(y),'k' ,label = 'irf')
+        ax1.legend()
+        ax1.set_ylim(bottom=np.min(y)) 
+        ax1.set_ylim(top=np.max(y)*2) 
+        
+        ax2.plot(t,(y-z)/np.sqrt(np.abs(z)))
+        ax2.axhline(0, color='black', lw=1, linestyle='--')
+        
         plt.draw()
         plt.pause(0.001)
     chi = np.sum((y-z-TINY)**2/ np.abs(z+TINY))/(n-m);
