@@ -12,7 +12,7 @@ import sys
 import time
 import pickle
 from tqdm import tqdm
-from fast_histogram import histogramdd  
+# from fast_histogram import histogramdd  
 # from mpi4py import MPI 
 from multiprocessing import Pool, cpu_count
 from numba import njit 

@@ -692,14 +692,14 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
             
             
 
-def FluoFit(irf, y, p, dt, tau, lim = None, init = None, flag_ml = True, plt_flag = 1):
+def FluoFit(irf, y, p, dt, tau = None, lim = None,  flag_ml = True, plt_flag = 1):
     """
     The function FLUOFIT performs a fit of a multi-exponential decay curve.
     The function arguments are:
     irf 	= 	Instrumental Response Function
     y 	= 	Fluorescence decay data
     p 	= 	Time between laser exciation pulses (in nanoseconds)
-    dt 	= 	Time width of one TCSPC channel (in nanoseconds)
+    dt 	= 	Time width of one TCSPC bin (in nanoseconds)
     tau 	= 	Initial guess times
     lim   = 	limits for the lifetimes guess times
     init	=	Whether to use a initial guess routine or not  (not implemented yet!!!)
@@ -723,7 +723,47 @@ def FluoFit(irf, y, p, dt, tau, lim = None, init = None, flag_ml = True, plt_fla
     y = np.array(y).flatten()
     n = len(irf); 
     c = 0 # this will change if colorshift correction is necessary
+    
+    if tau is None:
+        cx, tau, offset, c = DistFluoFit(y, p, dt, irf)
+        cx = np.array(cx).flatten()
+
+        # Identify where cx > 0
+        tmp = cx > 0
+        t = np.arange(len(tmp))  # Zero-indexed
+        
+        # Find indices where changes occur between positive and non-positive values
+        t1 = t[np.where(tmp[1:] > tmp[:-1])[0] + 1]  # No adjustment needed, already zero-indexed
+        t2 = t[np.where(tmp[:-1] > tmp[1:])[0]]  # No adjustment needed
+        # Adjust t1 and t2 lengths if necessary
+        if len(t1) == len(t2) + 1:
+            t1 = t1[:-1]
+            
+        if len(t2) == len(t1) + 1:
+            t2 = t2[1:]
+        
+        if t1[0] > t2[0]:
+            t1 = t1[:-1]
+            t2 = t2[1:]
+                    
+        # Initialize an empty list for the new tau values
+        tmp_tau = []
+        
+        # Calculate the weighted average of tau values
+        for j in range(len(t1)):
+            cx_segment = cx[t1[j]:t2[j]+1]  # No need for -1/+1 adjustments anymore
+            tau_segment = tau[t1[j]:t2[j]+1]
+            weighted_tau = np.sum(cx_segment * tau_segment) / np.sum(cx_segment)
+            tmp_tau.append(weighted_tau)
+            
+            # Update tau with the calculated values
+        tau = np.array(tmp_tau)
+        offset = 0
+    else:
+        c=0
+        
     m = len(tau)
+    
     
     if lim is None:
         lim_min =  np.array([0.01] * m)
