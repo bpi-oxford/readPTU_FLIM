@@ -12,10 +12,10 @@ import sys
 import time
 import pickle
 from tqdm import tqdm
-# from fast_histogram import histogramdd  
+from fast_histogram import histogramdd  
 # from mpi4py import MPI 
 from multiprocessing import Pool, cpu_count
-from numba import njit 
+# from numba import njit 
 
 #%%
 
@@ -434,7 +434,59 @@ class PTUreader():
 
 
 #TODO
-# write HarpTCSPC
+# write HarpTCSPC\
+    
+def Harp_TCPSC(filename,resolution=None,deadtime=None, photons=None):
+    if photons is None:
+        photons = int(1e6)
+        
+    ptu_reader = PTUreader(filename)
+    head = ptu_reader.head
+    if not head:
+        print("Header data could not be read. Aborting...")
+        return None, None, None, None, None, None, None
+    
+    if resolution is None:
+        Resolution = head['MeasDesc_Resolution'] * 1e9
+        chDiv = 1.0
+    else:
+        Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
+        chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
+    # Timeunit = 1e9/head['MeasDesc_GlobalResolution']
+    Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * (head['MeasDesc_Resolution'] / Resolution) * 1e9)
+    # tmpCh = np.ceil(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution']) # total number of channels in the original tcspc histogram
+    # tcspcdata = []
+    num = 1;
+    cnt = 0;
+    binT = np.arange(Ngate)
+    dind = None
+    
+    while num>0:
+        sync, tcspc, chan, special, num,_ = ptu_reader.get_photon_chunk(cnt+1, photons,head)
+        if dind is None:
+            idx = np.where(special==0)[0]
+            dind, occ = np.unique(chan[idx],return_counts=True) # unique detection channels and their occurence
+            idx = np.where(occ>10)[0]
+            dind = dind[idx]
+            dnum = len(dind)
+            tcspcdata = np.zeros((Ngate,dnum))
+        idx     = np.where(special==0)[0]
+        tcspc   = tcspc[idx]
+        chan    = chan[idx]
+        sync    = sync[idx]
+        special = special[idx]
+        
+        tcspc   = (tcspc + 0.5)//chDiv
+        cnt     = cnt + num
+        
+        if (num>0) and (len(chan)>0):
+            if deadtime is None:
+                tcspcdata = tcspcdata + mHist2(tcspc,chan,binT,dind)[0]
+            #TODO: Write the loop if deadtime is given
+            
+    return tcspcdata, binT, head  
+    
+        
     
 def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolution = 0.2):
     Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
@@ -464,18 +516,18 @@ def Process_Frame(im_sync,im_col,im_line,im_chan,im_tcspc,head,cnum = 1, resolut
             ind = (im_chan == dind[ch]) & (im_tcspc<tmpCh/cnum*(p+1)) & (im_tcspc>=p*tmpCh/cnum)
             idx = np.where(ind)[0]
             # print(len(idx))
-            tcspc_pix[:, :, :, ch*cnum + p] = mHist3(im_line[idx].astype(np.int64), 
-                                        im_col[idx].astype(np.int64), 
-                                        (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv), 
-                                        np.arange(nx), 
-                                        np.arange(ny), 
-                                        np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
-            
-            # tcspc_pix[:, :, :, ch*cnum + p] = histogramdd((im_line[idx].astype(np.int64), 
+            # tcspc_pix[:, :, :, ch*cnum + p] = mHist3(im_line[idx].astype(np.int64), 
             #                             im_col[idx].astype(np.int64), 
-            #                             (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv)), 
-            #                             (nx, ny, Ngate),
-            #                             [(0,nx-1),(0,ny-1),(0,Ngate-1)])  # tcspc histograms for all the pixels at once!
+            #                             (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv), 
+            #                             np.arange(nx), 
+            #                             np.arange(ny), 
+            #                             np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
+            
+            tcspc_pix[:, :, :, ch*cnum + p] = histogramdd((im_line[idx].astype(np.int64), 
+                                        im_col[idx].astype(np.int64), 
+                                        (im_tcspc[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv)), 
+                                        (nx, ny, Ngate),
+                                        [(0,nx-1),(0,ny-1),(0,Ngate-1)])  # tcspc histograms for all the pixels at once!
         
            
             tag[:, :, ch, p] = np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2)
@@ -594,22 +646,22 @@ def process_chunk(chunk_data):
             idx = np.where(ind)[0]
             
             # # Compute the histograms for the chunk of pixels
-            tcspc_pix_chunk[:, :, :, ch * cnum + p] = mHist3(
-                im_line_chunk[idx].astype(np.int64),
-                im_col_chunk[idx].astype(np.int64),
-                (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p * tmpCh / cnum / chDiv),
-                np.arange(start, end),  # The nx range handled by this process
-                np.arange(ny),
-                np.arange(Ngate)
-            )[0]  # tcspc histograms for the current chunk of pixels
+            # tcspc_pix_chunk[:, :, :, ch * cnum + p] = mHist3(
+            #     im_line_chunk[idx].astype(np.int64),
+            #     im_col_chunk[idx].astype(np.int64),
+            #     (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p * tmpCh / cnum / chDiv),
+            #     np.arange(start, end),  # The nx range handled by this process
+            #     np.arange(ny),
+            #     np.arange(Ngate)
+            # )[0]  # tcspc histograms for the current chunk of pixels
             
             
             
-            # tcspc_pix_chunk[:, :, :, ch*cnum + p] = histogramdd((im_line_chunk[idx].astype(np.int64), 
-            #                             im_col_chunk[idx].astype(np.int64), 
-            #                             (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv)), 
-            #                             (end-start, ny, Ngate),
-            #                             [(start,end-1),(0,ny-1),(0,Ngate-1)])  # tcspc histograms for all the pixels at once!
+            tcspc_pix_chunk[:, :, :, ch*cnum + p] = histogramdd((im_line_chunk[idx].astype(np.int64), 
+                                        im_col_chunk[idx].astype(np.int64), 
+                                        (im_tcspc_chunk[idx] / chDiv).astype(np.int64) - int(p*tmpCh/cnum/chDiv)), 
+                                        (end-start, ny, Ngate),
+                                        [(start,end-1),(0,ny-1),(0,Ngate-1)])  # tcspc histograms for all the pixels at once!
         
             
         
@@ -658,6 +710,12 @@ def Process_FrameFast(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum=1,
         tau[start:end, :, :, :] = tau_chunk
 
     return tag, tau, tcspc_pix
+
+
+#TODO
+# code mHist for a single channel
+
+
 
 def mHist2(x, y, xv=None, yv=None):
     x = np.asarray(x).ravel()
@@ -770,7 +828,7 @@ def mHist3_v2(x, y, z, xv=None, yv=None, zv=None):
 
     return h, xv, yv, zv
 
-@njit
+# @njit
 def compute_histogram(x, y, z, xv, yv, zv):
     nx = len(xv) 
     ny = len(yv) 
@@ -1790,7 +1848,6 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                     L1 = L1[2:]
                     L2 = L2[2:]
 
-#%%
         head['ImgHdr_FrameTime'] = 1e9 * np.mean(np.diff(f_times)) / head['TTResult_SyncRate']
         head['ImgHdr_PixelTime'] = 1e9 * np.mean(dt) / nx / head['TTResult_SyncRate']
         head['ImgHdr_DwellTime'] = head['ImgHdr_PixelTime'] / n_frames
@@ -1807,14 +1864,14 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         # print('Processing Frames')
         
         for frame in tqdm(range(np.max(im_frame)),desc= 'Processing Frames:'):
-            print('Fast')
-            tmptag, tmptau,_ = Process_FrameFast(im_sync[im_frame == frame],im_col[im_frame == frame],\
+            # print('Fast')
+            # tmptag, tmptau,_ = Process_FrameFast(im_sync[im_frame == frame],im_col[im_frame == frame],\
+            #                                   im_line[im_frame == frame],im_chan[im_frame == frame],\
+            #                                       im_tcspc[im_frame == frame],head, cnum, resolution = 0.2)
+            print('Slow')
+            tmptag, tmptau,_ = Process_Frame(im_sync[im_frame == frame],im_col[im_frame == frame],\
                                               im_line[im_frame == frame],im_chan[im_frame == frame],\
                                                   im_tcspc[im_frame == frame],head, cnum, resolution = 0.2)
-            # print('Slow')
-            # tmptag, tmptau,_ = Process_Frame(im_sync[im_frame == frame],im_col[im_frame == frame],\
-            #                                  im_line[im_frame == frame],im_chan[im_frame == frame],\
-            #                                      im_tcspc[im_frame == frame],head, cnum, resolution = 0.2)
             if tmptag is not None and tmptag.size > 0:
                 tag[:,:,:,frame, :] = tmptag
                 tau[:,:,:,frame, :] = tmptau
@@ -1843,9 +1900,12 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
                                             np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
             
                
-                tags[:, :, ch, p] = np.expand_dims(np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2), axis = -1)
-                taus[:, :, ch, p] = np.expand_dims(np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tags[:, :, ch, p], axis = -1) + 10**-10)) -
-                                                (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tags[:, :, ch, p], axis =-1) + 10**-10)) ** 2)), axis = -1)
+                # tags[:, :, ch, p] = np.expand_dims(np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2), axis = -1)
+                # taus[:, :, ch, p] = np.expand_dims(np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tags[:, :, ch, p], axis = -1) + 10**-10)) -
+                #                                 (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tags[:, :, ch, p], axis =-1) + 10**-10)) ** 2)), axis = -1)
+                tags[:, :, ch, p] = np.sum(tcspc_pix[:, :, :, ch*cnum + p], axis=2)
+                taus[:, :, ch, p] = np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tags[:, :, ch, p], axis = -1) + 10**-10)) -
+                                                (np.sum(binT * tcspc_pix[:, :, :, ch*cnum + p], axis=2) / (np.sum(tags[:, :, ch, p], axis =-1) + 10**-10)) ** 2))
                 timeF[ch*cnum + p] = np.round(im_sync[idx] / SyncRate / Resolution / 1e-9) + im_tcspc[idx].astype(np.int64)  # in tcspc bins 
                 
         # for ch in range(maxch_n):
@@ -1862,7 +1922,7 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         #     taus[:, :, ch] = np.real(np.sqrt((np.sum(binT ** 2 * tcspc_pix[:, :, :, ch], axis=2) / tags[:, :, ch]) -
         #                                      (np.sum(binT * tcspc_pix[:, :, :, ch], axis=2) / tags[:, :, ch]) ** 2))
             
- #%%           
+ #           
         filename = f"{filename[:-4]}_FLIM_data.pkl"
 
         # Create a dictionary to store all variables
@@ -1886,8 +1946,9 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
         with open(filename, 'wb') as f:
             pickle.dump(data_to_save, f)  
             
-            
-    elif head['ImgHdr_Ident'] == 9:          # ------------------------------------Multiframe scan------------------------
+      
+    # ------------------------------------Multiframe scan------------------------
+    elif head['ImgHdr_Ident'] == 9:        
         if 'ImgHdr_MaxFrames' in head:
             nz = head['ImgHdr_MaxFrames']
         else:

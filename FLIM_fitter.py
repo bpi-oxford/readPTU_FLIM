@@ -275,7 +275,7 @@ def Calc_mIRF(head, tcspc):
 
     tau = Resolution * (np.arange(tcspc.shape[1] ) + 0.5)
     IRF = np.zeros(tcspc.shape)
-    nex = 3
+    nex = 2
 
     t0_idx = np.argmax(tcspc, axis=1)
     t0 = tau[min(t0_idx.min(), len(tau) - 1)]
@@ -289,7 +289,7 @@ def Calc_mIRF(head, tcspc):
 
     for PIE in range(tcspc.shape[2]):
 
-        p = np.array([t0, w1, T1, T2, a, b, dt, 0.5, 1, 6])
+        p = np.array([t0, w1, T1, T2, a, b, dt, 0.5, 2])
         pl = np.array([t0 - 2.5, 1e-3, 1e-4, 1e-4, 1e-5, 1e-5, -0.3] + [0.1] * nex)
         pu = np.array([t0 + 2.5, 1, 1, 1, 0.01, 0.5, 0.5] + [10] * nex)
 
