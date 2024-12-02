@@ -42,7 +42,8 @@ for ch in range(tcspcdata.shape[1]):
     #                                          np.floor(head['MeasDesc_GlobalResolution']*10**9 + 0.5), \
     #                                          resolution, tau0 )
         
-
+    cx, tau, _, _, _, _, _  = DistFluoFit( np.squeeze(tcspcdata[:,ch]), np.floor(head['MeasDesc_GlobalResolution']*10**9 + 0.5),\
+                      resolution, irf=IRF, shift=(-10,10), flag=1, bild = True, N = 100, scattering = True)
 
 # only channel 1 - all tcspc - two component fitting
 

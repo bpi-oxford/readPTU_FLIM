@@ -565,7 +565,7 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
     irf = np.array(irf).flatten()
     y   = np.array(y).flatten()
     n = len(irf)
-    tp = dt*np.arange(1,p/dt+1) 
+    tp = dt*np.arange(p/dt) 
     t = np.arange(1,n+1)
     if len(shift)==1:
         shmin = -np.abs(shift).astype(np.int32)
@@ -575,7 +575,7 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
     else:
         print('shift should have only two values, sh_min and sh_max')
         
-    tau = (1/dt)/np.exp(np.arange(N+1)/N * np.log(p/dt)) # distribution of decay times
+    tau = (1/dt)/np.exp(np.arange(N+1)/N * np.log(p/dt)) # distribution of decay rates (inverse of lifetimes)
     if scattering is True:
         M0 = np.column_stack((np.ones(len(t)), irf, Convol(irf,np.exp(-tp[:, None]*tau))))
     else:  
@@ -611,7 +611,7 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
     err = np.sum((z-y+TINY)**2/np.abs(z+TINY)/len(ind))
     
     if bild is not None:
-        t = dt * t
+        t = dt * t # tau 
         
         # First plot: semilogarithmic plot of y and z
         plt.figure()
@@ -638,31 +638,37 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
         plt.axis([v[0], v[1], None, None])
         
         # Calculate fac and tau for next plot
-        ind = np.arange(len(cx) - 2)
-        len_ind = len(ind)
+        len_ind = len(cx) - 2
+        ind = np.arange(len_ind)
         tau = 1.0 / tau  # Reciprocal of tau
         fac = np.sqrt(np.dot(tau[:-1], 1.0/tau[1:]))
 
         
         # Subplot for distribution
         plt.subplot(2, 1, 2)
-        x_vals = np.reshape([fac * tau[ind], fac * tau[ind], tau[ind] / fac, tau[ind]], (4 * len_ind, 1))
-        y_vals = np.reshape([0 * tau[ind], cx[ind + 1], cx[ind + 1], 0 * tau[ind]], (4 * len_ind, 1))
+        # x_vals = np.reshape([fac * tau[ind], fac * tau[ind], tau[ind] / fac, tau[ind]], (4 * len_ind, 1))
+        # y_vals = np.reshape([0 * tau[ind], cx[ind + 1], cx[ind + 1], 0 * tau[ind]], (4 * len_ind, 1))
         
-        # Semilogarithmic plot with patch-like behavior
-        plt.semilogx(x_vals, y_vals)
-        plt.fill_between(x_vals.flatten(), y_vals.flatten(), color='b', alpha=0.3)
+        # # Semilogarithmic plot with patch-like behavior
+        # plt.semilogx(x_vals, y_vals)
+        # plt.fill_between(x_vals.flatten(), y_vals.flatten(), color='b', alpha=0.3)
+        
+        plt.semilogx(tau[ind],cx[ind+1])
         plt.xlabel('decay time [ns]')
         plt.ylabel('distribution')
         plt.show()
+        
+        t = t/dt
+        tau = 1.0/tau
      
 
     offset = cx[0]
     cx = cx[1:]
     
-    if flag >0:
-       tmp = cx>0.1*np.max(cx)
+    if flag > 0:
+       tmp = cx>0.01*np.max(cx)
        t = np.arange(len(tmp))
+       print((tmp))
        # Find rising and falling edges
        t1 = t[1:][tmp[1:] > tmp[:-1]]
        t2 = t[:-1][tmp[:-1] > tmp[1:]]
@@ -673,7 +679,8 @@ def DistFluoFit( y, p, dt, irf=None, shift=(-10,10), flag=0, bild = None, N = 10
        
        if t1[-1] > t2[-1]:
            t1 = t1[:-1]
-       
+       print(len(t1))
+       print(len(t2))
        if len(t1) == len(t2) + 1:
            t1 = t1[:-1]
        
