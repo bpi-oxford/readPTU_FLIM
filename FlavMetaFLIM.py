@@ -24,17 +24,19 @@ from plantseg.predictions.functional.predictions import unet_predictions
 from plantseg.segmentation.functional.segmentation import mutex_ws
 
 # Custom module imports
-from PTU_ScanRead import PTU_ScanRead, Process_Frame, mHist2
-from FLIM_fitter import Calc_mIRF, FluoFit, DistFluoFit
+from PTU_ScanRead import PTU_ScanRead, Process_Frame, mHist
+from FLIM_fitter import Calc_mIRF, FluoFit, DistFluoFit, PatternMatchIm
 
+#%%
 # ============================================================================
 # CONFIGURATION AND DATA LOADING SECTION
 # ============================================================================
 
 # File path configuration
 # filename = r'D:\Collabs\fromYuexuan\Yuexuan_ptu_testfile.ptu'  # Input PTU file path
-filename = r'D:\Collabs\fromKaitlyn\FLIM_liver\data\OTB5\RawImage1.ptu'
+filename = r'D:\Collabs\fromKaitlyn\Kaitlyn\data\OTB5\RawImage1.ptu'
 res_file = filename[:-4] + '_FLIM_data.pkl'  # Cached processed data file
+flag_allframes = True # flag for combining all frames together. In this case the data is processed as one single frame
 
 # Analysis parameters
 cnum = 1  # Number of PIE (Pulsed Interleaved Excitation) cycles, default value
@@ -79,3 +81,59 @@ else:
 resolution = 0.2  # ns - temporal resolution for TCSPC histogram binning
 dind = np.unique(im_chan)  # Array of unique detector channel indices
 nFrames = head['ImgHdr_MaxFrames']  # Total number of frames in the dataset
+
+
+
+# PIE (Pulsed Interleaved Excitation) configuration
+if 'PIENumPIEWindows' in head:
+    cnum = head['PIENumPIEWindows']  # Number of PIE cycles from header
+    print(f"PIE cycles detected: {cnum}")
+
+
+#%%
+
+auto_det = 0;  # Detector ID for autofluorescence channel detection
+auto_PIE = 1;  # Laser pulse number for autofluorescence channel (PIE window)
+flag_win = False; # Flag for window based lifetime estimation
+if flag_win is True:
+    win_size = 8
+    setp = 2
+
+
+if flag_allframes is True:
+    tag, tau, tcspc_pix = Process_Frame(
+        im_sync, im_col, im_line, im_chan,
+        im_tcspc, head, cnum=cnum, resolution=resolution
+    )
+    
+    nx,ny,ch,p = np.shape(tag)
+    
+    Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
+    chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
+    SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
+    Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * (head['MeasDesc_Resolution'] / Resolution / cnum) * 1e9)
+    tmpCh = np.ceil(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution']) # total number of channels in the original tcspc histogram
+    
+    idx = im_chan == auto_det
+    if len(idx) > 0:  # Check if there are photons to process
+        tcspc_im = mHist((im_tcspc[idx] / chDiv).astype(np.int64) - int((auto_PIE-1)*tmpCh/cnum/chDiv),
+                         np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
+    else:
+        print(f"Warning: No photons found for channel {auto_det} - skipping FLIM analysis")
+
+    tcspcIRF = Calc_mIRF(head, tcspc_im[np.newaxis,:,np.newaxis]);
+    tmpi = np.where((tcspcIRF/np.max(tcspcIRF))<(10**-4))[1]
+    tcspcIRF[:,tmpi,:]=0
+    
+    tau0 = np.array([0.3, 1.7, 6.0]) # initial guesses        
+    taufit, A, _, zfit, patterns, _, _, _, _ = FluoFit(np.squeeze(tcspcIRF), tcspc_im, \
+                                                        np.floor(head['MeasDesc_GlobalResolution']*10**9/cnum + 0.5), \
+                                                        resolution, tau0, flag_ml=True)    
+    patterns = patterns/np.sum(patterns,axis=0)    # normalized patterns
+    if flag_win is False: # pixel by pixel
+        #Amp = np.zeros((nx,ny,len(taufit)+1))
+        Amp,_ = PatternMatchIm(tcspc_pix[:,:,:,0], patterns, mode='PIRLS')
+        
+    
+
+ 

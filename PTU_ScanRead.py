@@ -714,6 +714,105 @@ def Process_FrameFast(im_sync, im_col, im_line, im_chan, im_tcspc, head, cnum=1,
 
 #TODO
 # code mHist for a single channel
+def mHist(x, xv=None):
+    """
+    Generate a 1D histogram from input data.
+    
+    This function creates a 1D histogram similar to the 2D mHist2 function,
+    using the same efficient indexing and counting approach.
+    
+    Parameters
+    ----------
+    x : array-like
+        Input data values to histogram
+    xv : array-like, optional
+        Bin specification:
+        - If None: uses 100 bins over data range
+        - If scalar: number of bins to use
+        - If array: bin edges for histogram
+    
+    Returns
+    -------
+    h : ndarray
+        Histogram counts for each bin
+    xv : ndarray
+        Bin edges or centers used for histogram
+    """
+    x = np.asarray(x).ravel()
+    
+    # Remove non-finite values
+    ind = ~np.isfinite(x)
+    x = x[~ind]
+    
+    if len(x) == 0:
+        return np.array([]), np.array([])
+    
+    # Handle bin specification
+    if xv is None:
+        # Default: 100 bins
+        NX = 100
+        xmin, xmax = np.min(x), np.max(x)
+        if xmin == xmax:
+            xmin -= 0.5
+            xmax += 0.5
+        dx = (xmax - xmin) / NX
+        xv = np.linspace(xmin, xmax, NX)
+        x = np.floor((x - xmin) / dx).astype(int)
+        x = np.clip(x, 0, NX - 1)
+        
+    elif np.isscalar(xv):
+        # Number of bins specified
+        NX = int(xv)
+        xmin, xmax = np.min(x), np.max(x)
+        if xmin == xmax:
+            xmin -= 0.5
+            xmax += 0.5
+        dx = (xmax - xmin) / NX
+        xv = np.linspace(xmin, xmax, NX)
+        x = np.floor((x - xmin) / dx).astype(int)
+        x = np.clip(x, 0, NX - 1)
+        
+    else:
+        # Bin edges provided
+        xv = np.asarray(xv)
+        xmin, xmax = xv[0], xv[-1]
+        
+        # Clip data to bin range
+        x = np.clip(x, xmin, xmax)
+        
+        # Handle uniform vs non-uniform spacing
+        if np.sum(np.diff(np.diff(xv))) == 0:
+            # Uniform spacing
+            dx = xv[1] - xv[0]
+            x = np.int64(np.floor((x - xmin) / dx + 0.5))
+            x = np.clip(x, 0, len(xv) - 1)
+        else:
+            # Non-uniform spacing
+            x = np.round(np.interp(x, xv, np.arange(len(xv)))).astype(int)
+            x = np.clip(x, 0, len(xv) - 1)
+    
+    # Initialize histogram array
+    h = np.zeros(len(xv), dtype=int)
+    
+    # Efficient histogram computation using the same approach as mHist2
+    if len(x) > 0:
+        # Sort the indices for efficient processing
+        num = np.sort(x)
+        np.add.at(h, num, 1)
+        
+        # Handle repeated values using the same technique as mHist2
+        tmp = np.diff((np.diff(np.concatenate(([-1], num, [-1]))) == 0).astype(int))
+        
+        if len(tmp) > 0:
+            ind = np.arange(len(num))
+            # Update histogram for repeated values
+            valid_tmp_1 = tmp == 1
+            valid_tmp_neg1 = tmp == -1
+            
+            if np.any(valid_tmp_1) and np.any(valid_tmp_neg1):
+                h[num[valid_tmp_1]] += -ind[valid_tmp_1] + ind[valid_tmp_neg1]
+    
+    return h, xv
 
 
 

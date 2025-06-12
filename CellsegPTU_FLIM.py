@@ -280,10 +280,14 @@ for nz in range(nFrames):
     Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * (head['MeasDesc_Resolution'] / Resolution / cnum) * 1e9)
     # tcspc_cell =  np.zeros((len(Cnum), Ngate), dtype=np.uint32)
     # print(len(idx))
-    tcspc_cell = mHist2(im_mask[idx].astype(np.int64), 
-                                (im_tcspc[idx] / chDiv).astype(np.int64) - int((auto_PIE-1)*tmpCh/cnum/chDiv), 
-                                np.arange(len(Cnum)), 
-                                np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
+    if len(idx) > 0:  # Check if there are photons to process
+        tcspc_cell = mHist2(im_mask[idx].astype(np.int64),
+                                    (im_tcspc[idx] / chDiv).astype(np.int64) - int((auto_PIE-1)*tmpCh/cnum/chDiv),
+                                    np.arange(len(Cnum)),
+                                    np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
+    else:
+        print(f"Warning: No photons found for frame {nz} - skipping FLIM analysis")
+        continue  # Skip to next frame
 
     tcspcIRF = Calc_mIRF(head, np.sum(tcspc_cell,axis=0)[np.newaxis,:,np.newaxis]);
     tmpi = np.where((tcspcIRF/np.max(tcspcIRF))<(10**-4))[1]
@@ -345,24 +349,27 @@ for nz in range(nFrames):
 
 # Test distributed lifetime fitting on first cell (experimental approach)
 # This method can provide lifetime distributions rather than discrete components
-if 'tcspc_cell' in locals() and 'tcspcIRF' in locals():
+if 'tcspc_cell' in locals() and 'tcspcIRF' in locals() and 'ncells' in locals():
     print("\n--- Testing Distributed Lifetime Fitting ---")
     
-    try:
-        cx, tau_dist, offset, c_dist, _, _, _ = DistFluoFit(
-            np.squeeze(tcspc_cell[0, :]),                              # First cell's histogram
-            np.floor(head['MeasDesc_GlobalResolution']*1e9/cnum + 0.5), # Repetition period
-            resolution,                                                # Time resolution
-            np.squeeze(tcspcIRF)                                      # Instrument response
-        )
-        
-        print(f"Distributed fitting results:")
-        print(f"Lifetime distribution centers: {tau_dist}")
-        print(f"Distribution coefficients: {cx}")
-        print(f"Background offset: {offset}")
-        
-    except Exception as e:
-        print(f"Distributed fitting failed: {e}")
+    if ncells > 0 and tcspc_cell.shape[0] > 0:
+        try:
+            cx, tau_dist, offset, c_dist, _, _, _ = DistFluoFit(
+                np.squeeze(tcspc_cell[0, :]),                              # First cell's histogram
+                np.floor(head['MeasDesc_GlobalResolution']*1e9/cnum + 0.5), # Repetition period
+                resolution,                                                # Time resolution
+                np.squeeze(tcspcIRF)                                      # Instrument response
+            )
+            
+            print(f"Distributed fitting results:")
+            print(f"Lifetime distribution centers: {tau_dist}")
+            print(f"Distribution coefficients: {cx}")
+            print(f"Background offset: {offset}")
+            
+        except Exception as e:
+            print(f"Distributed fitting failed: {e}")
+    else:
+        print("No cells available for distributed lifetime fitting")
 
 # ============================================================================
 # IRF VALIDATION AND QUALITY CHECK
@@ -387,7 +394,7 @@ if 'ncells' in locals() and 'tcspc_cell' in locals() and 'tcspcIRF' in locals():
     print("\n--- Detailed Single Cell Analysis (Cell #3) ---")
     
     # Perform detailed fitting on cell index 2 (3rd cell) for validation
-    if ncells > 2:
+    if ncells > 2 and tcspc_cell.shape[0] > 2:
         cell_idx = 2  # Third cell (0-indexed)
         tau0 = np.array([0.5, 2.0, 5.0])  # Initial lifetime guesses
         
@@ -406,7 +413,7 @@ if 'ncells' in locals() and 'tcspc_cell' in locals() and 'tcspcIRF' in locals():
             print(f"Normalized amplitudes: {A_test/np.sum(A_test)}")
             
             # Compare with main analysis results
-            if 'tauCell' in locals() and 'ACell' in locals():
+            if 'tauCell' in locals() and 'ACell' in locals() and tauCell.shape[0] > cell_idx:
                 print(f"Main analysis lifetimes: {tauCell[cell_idx, :]} ns")
                 print(f"Main analysis amplitudes: {ACell[cell_idx, :]}")
             
@@ -527,7 +534,7 @@ if 'tauCell' in locals() and 'ACell' in locals() and 'ncells' in locals():
     #     'max_cell_Area': max_cell_Area,
     #     'mem_PIE': mem_PIE, 'mem_det': mem_det,
     #     'auto_PIE': auto_PIE, 'auto_det': auto_det,
-    #     'optimal_beta': optimal_beta,
-    #     'optimal_post_mini_size': optimal_post_mini_size
+    #     'optimal_beta': beta,  # Use the actual beta variable from the loop
+    #     'optimal_post_mini_size': post_mini_size  # Use the actual post_mini_size variable
     # }
     # save_flim_results(save_filename, tauCell, ACell, LIm, AIm, mask, analysis_params)
