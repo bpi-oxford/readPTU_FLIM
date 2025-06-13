@@ -28,9 +28,10 @@ import matplotlib.pyplot as plt
 from scipy.optimize import nnls, lsq_linear
 from scipy.optimize import minimize as minimize_s
 #from scipy.linalg import lstsq
-import cupy as cp
-from numba import cuda, float32
+# import cupy as cp
+# from numba import cuda, float32
 from sklearn.linear_model import LinearRegression
+from tqdm import tqdm
 # from lmfit import minimize, Parameters #,report_fit, fit_report, report_errors,
 
 #%%
@@ -647,7 +648,7 @@ def PIRLSnonneg_batch(M, Y, max_num_iter=10):
     Beta= lr.coef_.T
     # Flatten pixel dimension: operate on each column sequentially
     # but reshaped 2D->1D pixel axis
-    for i in range(n_pixels):
+    for i in tqdm(range(n_pixels),desc = 'Fitting amplitudes for pixel/window'):
         beta, _ = nnls(M, Y[:, i])
         n = M.shape[0]
         TINY = 0.1 / n

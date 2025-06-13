@@ -64,7 +64,7 @@ conda install -c conda-forge tqdm
 conda install -c conda-forge fast-histogram
 ```
 
-#### GPU Acceleration (Optional but Recommended)
+#### GPU Acceleration (Optional)
 ```bash
 # Update setuptools and pip first
 python -m pip install -U setuptools pip
@@ -76,6 +76,9 @@ pip install cupy-core
 # Check your CUDA version with: nvidia-smi
 # Then install appropriate version, e.g., for CUDA 11.x:
 # pip install cupy-cuda11x
+
+# Note: GPU acceleration is currently disabled in FLIM_fitter.py
+# but can be re-enabled by uncommenting the GPU code sections
 ```
 
 ### 3. Install PlantSeg for Cell Segmentation (Optional but Recommended)

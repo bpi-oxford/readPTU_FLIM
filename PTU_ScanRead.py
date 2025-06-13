@@ -2511,6 +2511,257 @@ def PTU_ScanRead(filename, cnum = 1, plt_flag=False):
     return head, np.array(im_sync), np.array(im_tcspc), np.array(im_chan), np.array(im_line), np.array(im_col), np.array(im_frame)
     
 
-#%%    
+def cim(x, p1=None, p2=None, p3=None, clmp=None):
+    """
+    Python equivalent of MATLAB cim function for displaying images with various options.
+    
+    This function mimics the MATLAB cim function behavior for displaying 2D images,
+    with support for brightness overlays, custom colormaps, and automatic scaling.
+    
+    Parameters
+    ----------
+    x : array-like
+        Primary image data (determines color)
+    p1 : array-like or str or tuple, optional
+        - If array: brightness overlay data
+        - If str 'h' or 'v': colorbar orientation
+        - If tuple (2,): color scale range [min, max]
+        - If str: text label to overlay
+    p2 : array-like or str or tuple, optional
+        - If array and p1 is array: colormap
+        - If tuple (2,): color scale range [min, max]
+        - If str 'h' or 'v': colorbar orientation
+    p3 : str, optional
+        Colorbar orientation ('h' for horizontal, 'v' for vertical)
+    clmp : array-like, optional
+        Custom colormap (N×3 RGB values)
+        
+    Returns
+    -------
+    handle : matplotlib image handle
+        Handle to the displayed image
+        
+    Examples
+    --------
+    >>> # Basic image display
+    >>> cim(tau)
+    
+    >>> # FLIM image with brightness overlay and custom range
+    >>> cim(tau, intensity**0.75, [1.5, 4], 'v', custom_colormap)
+    
+    >>> # Image with colorbar
+    >>> cim(image_data, 'v')  # vertical colorbar
+    
+    Notes
+    -----
+    This function handles the most common use cases of the MATLAB cim function.
+    For complex multi-dimensional cases, consider using matplotlib directly.
+    """
+    
+    x = np.asarray(x)
+    
+    # Handle single argument case
+    if p1 is None:
+        if x.ndim == 2:
+            # Simple 2D image display
+            handle = plt.imshow(x, cmap='hot')
+            plt.axis('image')
+            plt.axis('off')
+            return handle
+        else:
+            print("Multi-dimensional arrays not fully supported. Use 2D arrays.")
+            return None
+    
+    # Handle two argument cases
+    if p2 is None:
+        if isinstance(p1, str):
+            # Colorbar case
+            handle = plt.imshow(x, cmap='hot')
+            plt.axis('image')
+            plt.axis('off')
+            if p1 == 'h':
+                plt.colorbar(orientation='horizontal')
+            elif p1 == 'v':
+                plt.colorbar(orientation='vertical')
+            else:
+                # Text overlay case
+                plt.text(x.shape[1] * (1 - 0.025 * len(p1)), 0.06 * x.shape[0],
+                        p1, fontname='Times', fontsize=16, color='white')
+            return handle
+            
+        elif hasattr(p1, '__len__') and len(p1) == 2:
+            # Range specification
+            handle = plt.imshow(x, cmap='hot', vmin=p1[0], vmax=p1[1])
+            plt.axis('image')
+            plt.axis('off')
+            return handle
+            
+        else:
+            # Brightness overlay case - create RGB image
+            return _create_brightness_overlay(x, p1, clmp)
+    
+    # Handle three or more argument cases
+    if isinstance(p1, np.ndarray) and p1.shape == x.shape:
+        # Brightness overlay with additional parameters
+        if hasattr(p2, '__len__') and len(p2) == 2:
+            # p2 is color range
+            return _create_brightness_overlay(x, p1, clmp, color_range=p2, orientation=p3)
+        else:
+            # p2 is colormap
+            return _create_brightness_overlay(x, p1, p2, orientation=p3)
+    
+    # Default case
+    handle = plt.imshow(x, cmap='hot')
+    plt.axis('image')
+    plt.axis('off')
+    return handle
+
+def _create_brightness_overlay(x, brightness, colormap=None, color_range=None, orientation=None):
+    """
+    Create an RGB image with color determined by x and brightness by brightness array.
+    
+    Parameters
+    ----------
+    x : ndarray
+        Color data
+    brightness : ndarray
+        Brightness data (same shape as x)
+    colormap : ndarray, optional
+        Custom colormap (64×3 RGB values)
+    color_range : tuple, optional
+        (min, max) range for color scaling
+    orientation : str, optional
+        'v' for vertical colorbar display
+        
+    Returns
+    -------
+    handle : matplotlib image handle
+    """
+    
+    # Normalize brightness to [0, 1]
+    brightness = np.asarray(brightness, dtype=float)
+    valid_brightness = np.isfinite(brightness)
+    if np.any(valid_brightness):
+        b_min = np.min(brightness[valid_brightness])
+        b_max = np.max(brightness[valid_brightness])
+        if b_max > b_min:
+            brightness = (brightness - b_min) / (b_max - b_min)
+        else:
+            brightness = np.zeros_like(brightness)
+    brightness = np.clip(brightness, 0, 1)
+    
+    # Handle color scaling
+    x = np.asarray(x, dtype=float)
+    if color_range is not None:
+        x_min, x_max = color_range
+    else:
+        valid_x = np.isfinite(x) & valid_brightness
+        if np.any(valid_x):
+            x_min = np.min(x[valid_x])
+            x_max = np.max(x[valid_x])
+        else:
+            x_min, x_max = 0, 1
+    
+    # Scale x to colormap indices [1, 64]
+    if x_max > x_min:
+        x_scaled = 1 + (np.clip(x, x_min, x_max) - x_min) / (x_max - x_min) * 63
+    else:
+        x_scaled = np.full_like(x, 32)  # Middle of colormap
+    
+    x_scaled = np.clip(x_scaled, 1, 64)
+    
+    # Set up colormap
+    if colormap is None:
+        # Use matplotlib's jet colormap
+        cmap = plt.cm.jet
+        colors = cmap(np.linspace(0, 1, 64))[:, :3]  # Get RGB values
+    else:
+        colors = np.asarray(colormap)
+        if colors.shape[0] != 64:
+            # Interpolate to 64 colors
+            from scipy.interpolate import interp1d
+            old_indices = np.linspace(0, 1, colors.shape[0])
+            new_indices = np.linspace(0, 1, 64)
+            colors_interp = []
+            for i in range(3):  # RGB channels
+                f = interp1d(old_indices, colors[:, i], kind='linear')
+                colors_interp.append(f(new_indices))
+            colors = np.column_stack(colors_interp)
+    
+    # Create RGB image
+    h, w = x.shape
+    rgb_image = np.zeros((h, w, 3))
+    
+    # Handle NaN values
+    x_scaled = np.nan_to_num(x_scaled, nan=1)
+    brightness = np.nan_to_num(brightness, nan=0)
+    
+    # Interpolate colors and apply brightness
+    x_floor = np.floor(x_scaled).astype(int) - 1  # Convert to 0-based indexing
+    x_ceil = np.ceil(x_scaled).astype(int) - 1
+    
+    # Ensure indices are within bounds
+    x_floor = np.clip(x_floor, 0, 63)
+    x_ceil = np.clip(x_ceil, 0, 63)
+    
+    # Linear interpolation weights
+    alpha = x_scaled - np.floor(x_scaled)
+    
+    for channel in range(3):
+        color_floor = colors[x_floor, channel]
+        color_ceil = colors[x_ceil, channel]
+        interpolated_color = (1 - alpha) * color_floor + alpha * color_ceil
+        rgb_image[:, :, channel] = interpolated_color * brightness
+    
+    # Display the image
+    plt.clf()
+    
+    if orientation == 'v' or (x.shape[0] >= x.shape[1]):
+        # Vertical layout
+        fig = plt.gcf()
+        fig.clear()
+        
+        # Main image
+        ax_img = fig.add_axes([0.1, 0.1, 0.7, 0.8])
+        handle = ax_img.imshow(rgb_image)
+        ax_img.set_aspect('equal')
+        ax_img.axis('off')
+        
+        # Colorbar
+        ax_cbar = fig.add_axes([0.82, 0.1, 0.05, 0.8])
+        
+        # Create colorbar data
+        cbar_data = np.linspace(x_max, x_min, h).reshape(-1, 1)
+        cbar_data = np.tile(cbar_data, (1, 2))
+        
+        ax_cbar.imshow(cbar_data, aspect='auto', extent=[0, 0.05, x_min, x_max], cmap='jet')
+        ax_cbar.set_xlim([0, 0.05])
+        ax_cbar.set_ylim([x_min, x_max])
+        ax_cbar.yaxis.tick_right()
+        ax_cbar.yaxis.set_label_position('right')
+        ax_cbar.set_xticks([])
+        
+        # Format colorbar ticks
+        y_ticks = ax_cbar.get_yticks()
+        y_ticks = y_ticks[(y_ticks >= x_min) & (y_ticks <= x_max)]
+        if len(y_ticks) > 0:
+            tick_precision = max(0, -int(np.floor(np.log10(np.abs(y_ticks[-1] - y_ticks[0])))) + 2)
+            y_tick_labels = [f'{tick:.{tick_precision}f}' for tick in y_ticks]
+            ax_cbar.set_yticks(y_ticks)
+            ax_cbar.set_yticklabels(y_tick_labels)
+    else:
+        # Standard horizontal layout
+        handle = plt.imshow(rgb_image)
+        plt.axis('equal')
+        plt.axis('off')
+        
+        # Add colorbar
+        if color_range is not None:
+            plt.colorbar(label='', shrink=0.8)
+    
+    plt.show()
+    return handle
+
+#%%
 if __name__ == '__main__':
-    PTU_ScanRead(r'D:\Collabs\fromMarcel\ATS6.ptu', cnum=1, plt_flag=False)    
+    PTU_ScanRead(r'D:\Collabs\fromMarcel\ATS6.ptu', cnum=1, plt_flag=False)

@@ -593,7 +593,7 @@ def run_all_pattern_tests():
     
     return all_results
 
-def create_amplitude_test_data(nx=16, ny=16, n_channels=256, dt=0.032):
+def create_amplitude_test_data(nx=16, ny=16, n_channels=781, dt=0.032):
     """
     Create 2D TCSPC data with spatially varying tri-exponential decay amplitudes
     
@@ -727,6 +727,7 @@ def plot_amplitude_recovery_results(data, results_dict, ground_truth, save_path=
     # Plot for each successful mode
     for col, (mode_name, results) in enumerate(successful_results.items()):
         C = results['coefficients']
+        C = C/np.sum(C[:,:,1:],axis=2, keepdims=True)
         
         # Row 0: Sample decay curve from center pixel
         center_x, center_y = data.shape[0]//2, data.shape[1]//2
