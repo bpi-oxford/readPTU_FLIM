@@ -27,9 +27,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import nnls, lsq_linear
 from scipy.optimize import minimize as minimize_s
-from scipy.linalg import lstsq
+#from scipy.linalg import lstsq
 import cupy as cp
-from numba import cuda, float32, int32
+from numba import cuda, float32
 from sklearn.linear_model import LinearRegression
 # from lmfit import minimize, Parameters #,report_fit, fit_report, report_errors,
 
@@ -589,114 +589,80 @@ def Calc_mIRF(head, tcspc):
 
 
 
-import numpy as np
-import cupy as cp
-from numba import cuda, float32
 
-# Adjust to your data dims
-t_MAX = 256  # max time bins
-B_MAX = 32   # max basis functions
-MAX_ITER = 10
-LR = 1e-2
-PGD_ITERS = 50
 
-@cuda.jit(device=True)
-def nnls_pgd(A, b, beta, m):
-    """Projected‐gradient NNLS on GPU solving A (m×m) × beta = b (m,)"""
-    for _ in range(PGD_ITERS):
-        # compute r = A @ beta - b
-        for i in range(m):
-            tmp = -b[i]
-            for j in range(m):
-                tmp += A[i, j] * beta[j]
-            # gradient step
-            for j in range(m):
-                beta[j] -= LR * 2 * A[i, j] * tmp
-        # projection
-        for j in range(m):
-            if beta[j] < 0:
-                beta[j] = 0
 
-@cuda.jit(device=True)
-def pirls_pixel(X, y, beta, n, m):
+# def PIRLSnonneg_batch_vectorized(M, Y, max_num_iter=10):
+#     n_samples, n_features = M.shape
+#     n_pixels = Y.shape[1]
+#     TINY = 0.1 / n_samples
+    
+#     # Initial NNLS for all pixels using sklearn
+#     lr = LinearRegression(positive=True, fit_intercept=False)
+#     lr.fit(M, Y)
+#     Beta = lr.coef_.T  # (n_features, n_pixels)
+    
+#     for iteration in range(max_num_iter):
+#         # Compute predictions for all pixels at once
+#         mu = M @ Beta  # (n_samples, n_pixels)
+        
+#         # Compute weights for all pixels simultaneously
+#         W = 1.0 / np.maximum(mu, TINY)  # (n_samples, n_pixels)
+        
+#         # Solve weighted normal equations for each pixel
+#         # This is the bottleneck that's hard to fully vectorize due to NNLS constraint
+#         for k in range(n_pixels):
+#             Aw = M.T @ np.diag(W[:, k]) @ M  # Weighted Gram matrix
+#             bw = M.T @ (W[:, k] * Y[:, k])   # Weighted RHS
+#             beta_new, _ = nnls(Aw, bw)
+#             Beta[:, k] = beta_new
+   
+#     return Beta
+
+
+
+def PIRLSnonneg_batch(M, Y, max_num_iter=10):
     """
-    One-pixel PIRLS matching CPU exactly:
-    1) Initial unweighted NNLS: Aw0 = X^T X, bw0 = X^T y
-    2) PIRLS loop: build Aw, bw; solve Aw beta = bw
-    """
-    # Initial unweighted solve
-    Aw0 = cuda.local.array((B_MAX, B_MAX), float32)
-    bw0 = cuda.local.array(B_MAX, float32)
-    # zero Aw0, bw0
-    for i in range(m):
-        bw0[i] = 0.0
-        for j in range(m):
-            Aw0[i, j] = 0.0
-    # accumulate unweighted
-    for i in range(n):
-        for j in range(m):
-            bw0[j] += X[i, j] * y[i]
-            for l in range(m):
-                Aw0[j, l] += X[i, j] * X[i, l]
-    # initial NNLS solve
-    nnls_pgd(Aw0, bw0, beta, m)
+    Batch PIRLS solver across multiple right-hand sides (pixels) without using Parallel.
 
-    # PIRLS iterations
-    tiny = 0.1 / n
-    for _ in range(MAX_ITER):
-        # allocate local Aw, bw
-        Aw = cuda.local.array((B_MAX, B_MAX), float32)
-        bw = cuda.local.array(B_MAX, float32)
-        # zero
-        for i in range(m):
-            bw[i] = 0.0
-            for j in range(m):
-                Aw[i, j] = 0.0
-        # build weighted normal equations
-        for i in range(n):
-            mu = 0.0
-            for j in range(m):
-                mu += X[i, j] * beta[j]
-            w = 1.0 / (mu if mu > tiny else tiny)
-            for j in range(m):
-                bw[j] += X[i, j] * w * y[i]
-                for l in range(m):
-                    Aw[j, l] += X[i, j] * w * X[i, l]
-        # solve weighted NNLS
-        nnls_pgd(Aw, bw, beta, m)
+    Parameters
+    ----------
+    X : ndarray, shape (n_samples, n_features)
+        Design matrix.
+    Y : ndarray, shape (n_samples, n_pixels)
+        Observation matrix, one column per pixel.
+    max_num_iter : int, optional
+        Number of PIRLS iterations.
 
-@cuda.jit
-def pirls_kernel(X, Y, C):
+    Returns
+    -------
+    Beta : ndarray, shape (n_features, n_pixels)
+        Fitted non-negative coefficients per pixel.
     """
-    GPU kernel: one thread per pixel.
-    X: (n_samples, n_features)
-    Y: (n_pixels, n_samples)
-    C: (n_features, n_pixels)
-    """
-    pix = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
-    total = Y.shape[0]
-    if pix >= total:
-        return
-    n = X.shape[0]
-    m = X.shape[1]
-    # local buffers
-    x_loc = cuda.local.array((t_MAX, B_MAX), float32)
-    y_loc = cuda.local.array(t_MAX, float32)
-    beta_loc = cuda.local.array(B_MAX, float32)
-    # copy X and Y[pix]
-    for i in range(n):
-        y_loc[i] = Y[pix, i]
-        for j in range(m):
-            x_loc[i, j] = X[i, j]
-    # initialize beta_loc
-    for j in range(m):
-        beta_loc[j] = 0.0
-    # run PIRLS per pixel
-    pirls_pixel(x_loc, y_loc, beta_loc, n, m)
-    # write back coefficients
-    for j in range(m):
-        C[j, pix] = beta_loc[j]
-
+    n_pixels = Y.shape[1]
+    # Beta = np.zeros((X.shape[1], n_pixels), dtype=float)
+    lr = LinearRegression(positive=True, fit_intercept=False)
+    lr.fit(M, Y)
+    # lr.coef_ is (n_targets, n_features) = (npix, n_basis)
+    Beta= lr.coef_.T
+    # Flatten pixel dimension: operate on each column sequentially
+    # but reshaped 2D->1D pixel axis
+    for i in range(n_pixels):
+        beta, _ = nnls(M, Y[:, i])
+        n = M.shape[0]
+        TINY = 0.1 / n
+        for _ in range(max_num_iter):
+            w = 1.0 / np.maximum(M.dot(beta), TINY)
+            MtW = M.T * w[np.newaxis, :]
+            Aw = MtW.dot(M)
+            bw = MtW.dot(Y[:, i])
+            beta_new, _ = nnls(Aw, bw)
+            if np.linalg.norm(beta_new - beta) < 1e-10:
+                beta = beta_new
+                break
+            beta = beta_new
+        Beta[:, i] = beta
+    return Beta
 
 
 def PIRLSnonneg(x, y, max_num_iter=10):
@@ -1511,6 +1477,7 @@ def PatternMatchIm(y,M,mode = 'Default'):
           """
      nx, ny, t = y.shape
      t2, n_basis = M.shape
+     M = M/np.sum(M,axis=0) # normalize the patterns 
      assert t2 == t, "time‐axis of y and M must match."
      
      # reshape y into (t, nx*ny)
@@ -1531,6 +1498,12 @@ def PatternMatchIm(y,M,mode = 'Default'):
          C_flat = lr.coef_.T          # make (n_basis, npix)
          
      elif mode == 'PIRLS':
+     
+         # call GPU batch PIRLS
+         
+         
+               
+         
          # No built‐in vectorized PIRLSnonneg, so we’ll need to loop over
          # pixels (or parallelize).  
              
@@ -1538,47 +1511,56 @@ def PatternMatchIm(y,M,mode = 'Default'):
          # for k in range(nx*ny):
          #     c, _ = PIRLSnonnegFast(M, Y[:,k])
          #     C_flat[:,k] = c
-         nx, ny, t = y.shape
-         threads = 128
-         assert M.shape[0] == t
-         npix = nx * ny
-         # flatten
-         Y = y.reshape(npix, t).astype(np.float32)
-         X = M.astype(np.float32)
-         # transfer to GPU
-         Xg = cuda.to_device(X)
-         Yg = cuda.to_device(Y)
-         # allocate output
-         Cg = cuda.device_array((M.shape[1], npix), dtype=np.float32)
-         blocks = (npix + threads - 1) // threads
-         # launch kernel
-         pirls_kernel[blocks, threads](Xg, Yg, Cg)
-         # fast host transfer
-         host_C = cuda.pinned_array((M.shape[1], npix), dtype=np.float32)
-         stream = cuda.stream()
-         Cg.copy_to_host(host_C, stream=stream)
-         stream.synchronize()
-         C_flat = host_C
-             # reconstruct
-         Z_flat = X.dot(C_flat)
-         C = C_flat.T.reshape(nx, ny, -1)
-         Z = Z_flat.T.reshape(nx, ny, t)
+         
+         # nx, ny, t = y.shape
+         # threads = 128
+         # assert M.shape[0] == t
+        
+         # npix = nx * ny
+         # # flatten
+         # Y = y.reshape(npix, t).astype(np.float32)
+         # X = M.astype(np.float32)
+         # # transfer to GPU
+         # Xg = cuda.to_device(X)
+         # Yg = cuda.to_device(Y)
+         # # allocate output
+         # Cg = cuda.device_array((M.shape[1], npix), dtype=np.float32)
+         # blocks = (npix + threads - 1) // threads
+         # # launch kernel
+         # pirls_kernel[blocks, threads](Xg, Yg, Cg)
+         # # fast host transfer
+         # host_C = cuda.pinned_array((M.shape[1], npix), dtype=np.float32)
+         # stream = cuda.stream()
+         # Cg.copy_to_host(host_C, stream=stream)
+         # stream.synchronize()
+         # C_flat = host_C
+         #     # reconstruct
+         # Z_flat = X.dot(C_flat)
+         # C = C_flat.T.reshape(nx, ny, -1)
+         # Z = Z_flat.T.reshape(nx, ny, t)
 
-         # free GPU memory
-         try:
-            # delete device arrays
-            del X_d, Y_d, C_d
-            # reset Numba CUDA context (frees all allocations)
-            cuda.current_context().reset()
-         except Exception:
-            pass
-         try:
-            # clear CuPy memory pools
-            mp = cp.get_default_memory_pool(); mp.free_all_blocks()
-            pm = cp.get_default_pinned_memory_pool(); pm.free_all_blocks()
-         except Exception:
-            pass
-         return C, Z
+         # # free GPU memory
+         # try:
+         #    # delete device arrays
+         #    del X_d, Y_d, C_d
+         #    # reset Numba CUDA context (frees all allocations)
+         #    cuda.current_context().reset()
+         # except Exception:
+         #    pass
+         # try:
+         #    # clear CuPy memory pools
+         #    mp = cp.get_default_memory_pool(); mp.free_all_blocks()
+         #    pm = cp.get_default_pinned_memory_pool(); pm.free_all_blocks()
+         # except Exception:
+         #    pass
+        
+        
+        
+        
+        
+        
+         C_flat = PIRLSnonneg_batch(M, Y)
+        
    
       
      else:
@@ -1590,4 +1572,4 @@ def PatternMatchIm(y,M,mode = 'Default'):
      # reshape back to (nx,ny,...)
      C = C_flat.T.reshape(nx, ny, n_basis)
      Z = Z_flat.T.reshape(nx, ny, t)
-     return C, Z   
+     return C, Z
