@@ -181,6 +181,191 @@ def vignette_correction(int_im, blur_factor=6, lower_percentile=2, upper_percent
     
     return int2, bblur
 
+def subplot_cim(x, brightness=None, color_range=None, colormap=None, ax=None):
+    """
+    Create a cim-style display within a matplotlib subplot.
+    
+    This function replicates the cim functionality but works within subplots,
+    creating an RGB image with color determined by x and brightness overlay.
+    
+    Parameters
+    ----------
+    x : ndarray
+        Color data (2D array)
+    brightness : ndarray, optional
+        Brightness overlay data (same shape as x)
+    color_range : tuple, optional
+        (min, max) range for color scaling
+    colormap : ndarray, optional
+        Custom colormap (64×3 RGB values)
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on. If None, uses current axes
+        
+    Returns
+    -------
+    handle : matplotlib image handle
+        Handle to the displayed image
+    """
+    
+    if ax is None:
+        ax = plt.gca()
+    
+    x = np.asarray(x, dtype=float)
+    
+    # Simple display if no brightness overlay
+    if brightness is None:
+        if color_range is not None:
+            handle = ax.imshow(x, cmap='viridis', vmin=color_range[0], vmax=color_range[1])
+        else:
+            handle = ax.imshow(x, cmap='viridis')
+        ax.axis('off')
+        return handle
+    
+    # Create brightness overlay
+    brightness = np.asarray(brightness, dtype=float)
+    
+    # Normalize brightness to [0, 1]
+    valid_brightness = np.isfinite(brightness)
+    if np.any(valid_brightness):
+        b_min = np.min(brightness[valid_brightness])
+        b_max = np.max(brightness[valid_brightness])
+        if b_max > b_min:
+            brightness = (brightness - b_min) / (b_max - b_min)
+        else:
+            brightness = np.zeros_like(brightness)
+    brightness = np.clip(brightness, 0, 1)
+    
+    # Handle color scaling
+    if color_range is not None:
+        x_min, x_max = color_range
+    else:
+        valid_x = np.isfinite(x) & valid_brightness
+        if np.any(valid_x):
+            x_min = np.min(x[valid_x])
+            x_max = np.max(x[valid_x])
+        else:
+            x_min, x_max = 0, 1
+    
+    # Scale x to colormap indices [0, 1]
+    if x_max > x_min:
+        x_scaled = np.clip((x - x_min) / (x_max - x_min), 0, 1)
+    else:
+        x_scaled = np.full_like(x, 0.5)
+    
+    # Set up colormap
+    if colormap is None:
+        cmap = plt.cm.viridis
+        colors = cmap(np.linspace(0, 1, 256))[:, :3]
+    else:
+        colors = np.asarray(colormap)
+        if colors.shape[0] != 256:
+            # Interpolate to 256 colors for better resolution
+            from scipy.interpolate import interp1d
+            old_indices = np.linspace(0, 1, colors.shape[0])
+            new_indices = np.linspace(0, 1, 256)
+            colors_interp = []
+            for i in range(3):
+                f = interp1d(old_indices, colors[:, i], kind='linear')
+                colors_interp.append(f(new_indices))
+            colors = np.column_stack(colors_interp)
+    
+    # Create RGB image
+    h, w = x.shape
+    rgb_image = np.zeros((h, w, 3))
+    
+    # Handle NaN values
+    x_scaled = np.nan_to_num(x_scaled, nan=0)
+    brightness = np.nan_to_num(brightness, nan=0)
+    
+    # Map to colormap and apply brightness
+    color_indices = (x_scaled * (colors.shape[0] - 1)).astype(int)
+    color_indices = np.clip(color_indices, 0, colors.shape[0] - 1)
+    
+    for channel in range(3):
+        rgb_image[:, :, channel] = colors[color_indices, channel] * brightness
+    
+    # Display the image
+    handle = ax.imshow(rgb_image)
+    ax.axis('off')
+    
+    # Add colorbar as scale bar
+    if color_range is not None:
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        
+        # Create a colorbar using the colormap
+        if colormap is None:
+            cmap = plt.cm.viridis
+        else:
+            from matplotlib.colors import ListedColormap
+            cmap = ListedColormap(colormap)
+        
+        # Create a scalar mappable for the colorbar
+        import matplotlib.cm as cm
+        from matplotlib.colors import Normalize
+        norm = Normalize(vmin=x_min, vmax=x_max)
+        sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        
+        cbar = plt.colorbar(sm, cax=cax)
+        cbar.ax.tick_params(labelsize=8)
+    
+    return handle
+
+def display_amplitude_maps_subplot(Amp, int2, taufit, flag_win=True, colormap=None):
+    """
+    Display all amplitude maps in a single figure with subplots using cim-style visualization.
+    
+    Parameters
+    ----------
+    Amp : ndarray
+        Amplitude data (nx, ny, n_components)
+    int2 : ndarray
+        Vignette-corrected intensity for brightness overlay
+    taufit : array-like
+        Fitted lifetime values
+    flag_win : bool, optional
+        Flag indicating windowed vs pixel-wise analysis
+    colormap : ndarray, optional
+        Custom colormap (64×3 RGB values)
+    """
+    
+    print(f"Creating amplitude subplot display for {len(taufit)} lifetime components...")
+    
+    # Create custom colormap if not provided
+    if colormap is None:
+        import matplotlib.cm as cm
+        colormap = cm.viridis(np.linspace(0, 1, 64))[:, :3]
+    
+    # Create figure with subplots
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    axes = axes.flatten()
+    
+    # Display background/offset amplitude (component 0)
+    amp_range = [np.min(Amp[:, :, 0]), np.max(Amp[:, :, 0])]
+    subplot_cim(Amp[:, :, 0], int2**0.5, amp_range, colormap, ax=axes[0])
+    axes[0].set_title('Background/Offset', fontsize=12, pad=10)
+    
+    # Display amplitudes for each lifetime component
+    for i, tau in enumerate(taufit):
+        if i + 1 < len(axes):
+            amp_data = Amp[:, :, i + 1]
+            amp_range = [np.min(amp_data), np.max(amp_data)]
+            subplot_cim(amp_data, int2**0.5, amp_range, colormap, ax=axes[i + 1])
+            axes[i + 1].set_title(f'Component {i+1}: τ = {tau:.2f} ns', fontsize=12, pad=10)
+    
+    # Hide unused subplot if only 2 lifetimes
+    if len(taufit) < 3:
+        axes[-1].set_visible(False)
+    
+    plt.tight_layout()
+    plt.suptitle(f'FLIM Amplitude Maps - {"Windowed" if flag_win else "Pixel-wise"} Analysis',
+                 fontsize=14, y=1.02)
+    plt.show()
+    
+    print(f"✓ All {len(taufit)+1} amplitude components displayed in single subplot figure")
+
 #%%
 
 auto_det = 0;  # Detector ID for autofluorescence channel detection
@@ -262,7 +447,7 @@ if flag_allframes is True:
         # Store windowed results
         Amp = Amp_win
         Z = Z_win
-        print(f" Windowed analysis completed: {n_win_x}x{n_win_y} windows processed")
+        print(f"✓ Windowed analysis completed: {n_win_x}x{n_win_y} windows processed")
 
     # ============================================================================
     # AMPLITUDE VISUALIZATION
@@ -274,28 +459,12 @@ if flag_allframes is True:
     print("\nApplying vignette correction to intensity image...")
     int2, bblur = vignette_correction(int_im)
    
-    print(f"Creating amplitude plots for {len(taufit)} lifetime components using cim...")
-    
     # Create custom colormap (similar to MATLAB's viridis)
     import matplotlib.cm as cm
     custom_cmap = cm.viridis(np.linspace(0, 1, 64))[:, :3]  # 64x3 RGB array
     
-    # Display each amplitude component using cim in separate figures
-    # Note: cim() function creates its own figure layout and doesn't work well with subplots
-    
-    print("Displaying Background/Offset Amplitude...")
-    plt.figure(figsize=(8, 6))
-    cim(Amp[:, :, 0], int2**0.5, [np.min(Amp[:, :, 0]), np.max(Amp[:, :, 0])], 'v', custom_cmap)
-    plt.suptitle('Background/Offset Amplitude', fontsize=14)
-    
-    print("Displaying lifetime component amplitudes...")
-    for i, tau in enumerate(taufit):
-        plt.figure(figsize=(8, 6))
-        amp_data = Amp[:, :, i + 1]
-        cim(amp_data, int2**0.5, [np.min(amp_data), np.max(amp_data)], 'v', custom_cmap)
-        plt.suptitle(f'Component {i+1} Amplitude: τ = {tau:.2f} ns', fontsize=14)
-    
-    print(f" All {len(taufit)+1} amplitude components displayed using cim function")
+    # Display all amplitude maps in a single subplot figure
+    display_amplitude_maps_subplot(Amp, int2, taufit, flag_win, custom_cmap)
     
     # Print amplitude statistics
     print(f"\nAmplitude Statistics:")
@@ -327,9 +496,3 @@ if flag_allframes is True:
     cim(tau_avg, int2**0.75, [1.5, 4], 'v', custom_cmap)
     plt.suptitle('FLIM Image: Lifetime with Vignette-Corrected Intensity Overlay', fontsize=14)
     plt.show()
-
-   
-
- 
- 
- 
