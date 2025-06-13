@@ -493,7 +493,44 @@ print(f"True coefficients: {true_coeffs[32, 32, :]}")
 print(f"Recovered coefficients: {c_pixel}")
 ```
 
-### 7. Data Visualization and Analysis
+### 7. Advanced Amplitude Visualization (FlavMetaFLIM.py)
+
+The FlavMetaFLIM module now includes advanced amplitude visualization capabilities with cim-style displays:
+
+```python
+from FlavMetaFLIM import display_amplitude_maps_subplot, subplot_cim
+
+# Example usage after FLIM analysis in FlavMetaFLIM.py
+# The script automatically displays amplitude maps with the following features:
+
+# 1. Subplot layout with all 4 amplitude components in one figure
+# 2. cim-style visualization with brightness overlay
+# 3. Individual scale bars for each component
+# 4. Proper titles and spacing
+
+# Key functions added:
+# - subplot_cim(): Creates cim-style displays within matplotlib subplots
+# - display_amplitude_maps_subplot(): Shows all amplitude maps in 2x2 layout
+
+# Features:
+# - Background/Offset amplitude (component 0)
+# - Individual lifetime component amplitudes (τ1, τ2, τ3)
+# - Vignette-corrected intensity overlay for brightness modulation
+# - Custom viridis colormap with proper scaling
+# - Individual colorbars with appropriate tick labels
+# - Professional layout with adjustable title positioning
+
+# The visualization automatically:
+# 1. Normalizes amplitudes across lifetime components
+# 2. Applies vignette correction to intensity overlay
+# 3. Creates RGB images with color-brightness coupling
+# 4. Adds scale bars to each subplot
+# 5. Formats titles with lifetime values
+
+print("✅ Advanced amplitude visualization with cim-style display completed")
+```
+
+### 8. Data Visualization and Analysis
 
 ```python
 # Create comprehensive FLIM visualization
@@ -552,7 +589,7 @@ for i in range(3):
 
 ### Analysis Pipelines
 - **[`CellsegPTU_FLIM.py`](CellsegPTU_FLIM.py)**: Complete cell segmentation and FLIM analysis pipeline
-- **[`FlavMetaFLIM.py`](FlavMetaFLIM.py)**: Specialized FLIM analysis for metabolic imaging
+- **[`FlavMetaFLIM.py`](FlavMetaFLIM.py)**: Specialized FLIM analysis for metabolic imaging with advanced amplitude visualization
 
 ### Supported Hardware
 The library supports PTU files from various PicoQuant TCSPC devices:

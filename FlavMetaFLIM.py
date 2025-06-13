@@ -12,21 +12,14 @@ import numpy as np
 import os
 import pickle
 import glob
-from typing import Dict, List, Tuple, Optional, Any
 
 # Third-party imports
 import matplotlib.pyplot as plt
-from sklearn.model_selection import ParameterGrid
-from tqdm import tqdm
 from scipy.ndimage import gaussian_filter
-
-# PlantSeg imports for cell segmentation
-from plantseg.predictions.functional.predictions import unet_predictions
-from plantseg.segmentation.functional.segmentation import mutex_ws
 
 # Custom module imports
 from PTU_ScanRead import PTU_ScanRead, Process_Frame, mHist, cim
-from FLIM_fitter import Calc_mIRF, FluoFit, DistFluoFit, PatternMatchIm
+from FLIM_fitter import Calc_mIRF, FluoFit, PatternMatchIm
 
 #%%
 # ============================================================================
