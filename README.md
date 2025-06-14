@@ -1,9 +1,9 @@
 # readPTU_FLIM Library
-### For demo: Jupyter Notebook to work with PicoQuant PTU files and FLIM analysis
-**`The library provides the capability to handle all PicoQuant's TCSPC Harps in T2 as well as T3 mode with advanced FLIM analysis capabilities.`**
+### Advanced FLIM Analysis Pipeline for PicoQuant PTU files
+**`Comprehensive toolkit for fluorescence lifetime imaging microscopy (FLIM) data analysis with deep learning-based cell segmentation.`**
 
 - PicoQuant uses a bespoke file format called PTU to store data from time-tag-time-resolved (TTTR) measurements.<br/>
-- Current file format (.ptu) and is subsequent to the former .pt2 or .pt3 and can handle both T2 and T3 acquisition modes for a variety of TCSPC devices (MultiHarp, HydraHarp, TimeHarp, PicoHarp, etc.) <br/>
+- Current file format (.ptu) supports both T2 and T3 acquisition modes for various TCSPC devices (MultiHarp, HydraHarp, TimeHarp, PicoHarp, etc.) <br/>
 - At the moment, the library was tested for FLIM data obtained using MultiHarp, HydraHarp and PicoHarp. <br/>
 - Includes advanced cell segmentation using PlantSeg and comprehensive fluorescence lifetime fitting capabilities.
 
@@ -16,11 +16,8 @@
 - ✅ Comprehensive TCSPC analysis tools
 - ✅ Support for PIE (Pulsed Interleaved Excitation) data
 - ✅ Multi-frame and multi-channel analysis
-
-### **`What is not available !`**
-- Option to save data after processing in original library (now available in extended modules) <br/>
-
-#### !!! Help is only an email away for MATLAB implementation of the same library.
+- ✅ Automated batch processing with multiple output formats
+- ✅ Professional visualization with CIM-style displays
 
 ## 🚀 Quick Start with Anaconda
 
@@ -40,50 +37,12 @@ conda activate ptu_flim
 
 ### 2. Install Core Dependencies
 
-#### Core Scientific Computing Packages
 ```bash
 # Install from conda-forge for better compatibility
-conda install -c conda-forge numpy matplotlib scipy numba scikit-learn pandas
+conda install -c conda-forge numpy matplotlib scipy numba scikit-learn pandas tqdm lmfit scikit-optimize tifffile
 ```
 
-#### Advanced Analysis and Optimization
-```bash
-# Install optimization and curve fitting
-conda install -c conda-forge scikit-optimize lmfit
-```
-
-#### Progress Bars and Utilities
-```bash
-# Install tqdm for progress bars
-conda install -c conda-forge tqdm
-```
-
-#### Fast Histogram Computing
-```bash
-# Install fast-histogram for efficient histogram computation
-conda install -c conda-forge fast-histogram
-```
-
-#### GPU Acceleration (Optional)
-```bash
-# Update setuptools and pip first
-python -m pip install -U setuptools pip
-
-# Install CuPy for GPU acceleration (requires CUDA-compatible GPU)
-pip install cupy-core
-
-# Note: For full CUDA support, you may need a specific CuPy version
-# Check your CUDA version with: nvidia-smi
-# Then install appropriate version, e.g., for CUDA 11.x:
-# pip install cupy-cuda11x
-
-# Note: GPU acceleration is currently disabled in FLIM_fitter.py
-# but can be re-enabled by uncommenting the GPU code sections
-```
-
-### 3. Install PlantSeg for Cell Segmentation (Optional but Recommended)
-
-PlantSeg provides state-of-the-art cell segmentation capabilities:
+### 3. Install PlantSeg for Cell Segmentation (Required for CellsegPTU_FLIM.py only)
 
 ```bash
 # Install PlantSeg dependencies
@@ -109,9 +68,9 @@ dependencies:
   - scikit-learn
   - pandas
   - tqdm
-  - fast-histogram
-  - scikit-optimize
   - lmfit
+  - scikit-optimize
+  - tifffile
   - pytorch
   - torchvision
   - torchaudio
@@ -124,8 +83,6 @@ Then install:
 ```bash
 conda env create -f environment.yml
 conda activate ptu_flim
-python -m pip install -U setuptools pip
-pip install cupy-core
 ```
 
 ### 5. Verify Installation
@@ -140,12 +97,11 @@ import scipy
 import numba
 from sklearn.model_selection import ParameterGrid
 import tqdm
-from fast_histogram import histogramdd
+import tifffile
 
 # Test FLIM modules
-from readPTU_FLIM import PTUreader
-from FLIM_fitter import FluoFit, DistFluoFit, Calc_mIRF
 from PTU_ScanRead import PTU_ScanRead, Process_Frame
+from FLIM_fitter import FluoFit, DistFluoFit, Calc_mIRF
 
 # Test PlantSeg (if installed)
 try:
@@ -153,446 +109,122 @@ try:
     from plantseg.segmentation.functional.segmentation import mutex_ws
     print("✅ PlantSeg successfully imported")
 except ImportError:
-    print("⚠️ PlantSeg not available - cell segmentation features disabled")
-
-# Test CuPy (if installed)
-try:
-    import cupy as cp
-    print(f"✅ CuPy successfully imported - GPU acceleration available")
-    print(f"   CUDA version: {cp.cuda.runtime.runtimeGetVersion()}")
-    print(f"   Available GPU memory: {cp.cuda.Device().mem_info[1] / 1e9:.1f} GB")
-except ImportError:
-    print("⚠️ CuPy not available - using CPU-only computations")
-except Exception as e:
-    print(f"⚠️ CuPy installed but GPU not accessible: {e}")
+    print("⚠️ PlantSeg not available - CellsegPTU_FLIM.py features disabled")
 
 print("✅ All core dependencies successfully imported!")
 ```
 
-## 📦 Package Dependencies
+## 📋 Analysis Pipelines
 
-### Core Dependencies (Required)
-- **numpy**: Numerical operations and array handling
-- **matplotlib**: Plotting and visualization
-- **scipy**: Scientific computing and optimization
-- **numba**: Just-in-time compilation for performance
-- **fast-histogram**: Fast histogram computation
-- **tqdm**: Progress bars
+The library provides two main analysis pipelines, each with different requirements and use cases:
 
-### Analysis Dependencies (Required)
-- **scikit-learn**: Machine learning utilities (parameter grid search, LinearRegression for PatternMatchIm)
-- **pandas**: Data manipulation and analysis
-- **lmfit**: Non-linear least-squares minimization
-- **scikit-optimize**: Optimization algorithms
+### 🧬 **FlavMetaFLIM.py** - Metabolic FLIM Analysis
 
-### Advanced Features (Optional)
-- **plantseg**: Deep learning-based plant cell segmentation
-- **pytorch**: Deep learning framework (required for PlantSeg)
-- **cupy-core**: GPU-accelerated computing (NumPy-like API on CUDA)
+**Purpose**: Automated FLIM analysis for FAD metabolic imaging with batch processing capabilities.
 
-### Basic Usage Example
+**Key Features**:
+- Automated batch processing of multiple folders
+- Results saved next to raw PTU files
+- Multiple output formats (.pkl, .csv, .tif, .png)
+- CIM-style lifetime visualization
+- Amplitude component analysis with scale bars
+- Windowed vs pixel-wise analysis options
 
-```python
-# Import the library
-from readPTU_FLIM import PTUreader
-import numpy as np
-from matplotlib import pyplot as plt
-
-# Basic PTU file reading
-ptu_file = PTUreader('your_file.ptu', print_header_data=False)
-
-# Get FLIM data stack (requires PTU file)
-# flim_data_stack, intensity_image = ptu_file.get_flim_data_stack()
-
-# Advanced usage with full pipeline
-from PTU_ScanRead import PTU_ScanRead
-head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame = PTU_ScanRead('your_file.ptu')
+**Requirements**:
+```bash
+# Core scientific computing (required)
+conda install -c conda-forge numpy matplotlib scipy numba scikit-learn pandas tqdm lmfit tifffile
 ```
 
-## 📚 Comprehensive Usage Examples
-
-### 1. Basic PTU File Reading
-
+**Usage**:
 ```python
-from readPTU_FLIM import PTUreader
-import numpy as np
-import matplotlib.pyplot as plt
+from FlavMetaFLIM import process_single_file, process_multiple_folders
 
-# Read PTU file and display header information
-ptu_file = PTUreader('Test_FLIM_image_daisyPollen_PicoHarp_2.ptu', print_header_data=True)
+# Single file processing
+results = process_single_file(
+    'path/to/file.ptu',
+    auto_det=0,          # Detector channel
+    auto_PIE=1,          # PIE window
+    flag_win=True,       # Use windowed analysis
+    resolution=0.2,      # Time resolution (ns)
+    tau0=[0.3, 1.7, 6.0] # Initial lifetime guesses
+)
 
-# Access raw photon data
-sync = ptu_file.sync        # Macro photon arrival time
-tcspc = ptu_file.tcspc      # Micro photon arrival time (TCSPC time bin resolution)
-channel = ptu_file.channel  # Detection channel of TCSPC unit (≤8 for PQ hardware)
-special = ptu_file.special  # Special event markers (Frame, LineStart, LineStop, etc.)
+# Batch processing multiple folders
+all_results = process_multiple_folders(
+    ['folder1', 'folder2', 'folder3'],
+    auto_det=0,
+    flag_win=True,
+    resolution=0.2
+)
 ```
 
-### 2. FLIM Data Stack Generation
+**Output Files** (saved next to PTU files):
+- `filename_FLIM_results.pkl` - Complete analysis results
+- `filename_lifetimes.csv` - Lifetime values by component
+- `filename_amplitude_stats.csv` - Amplitude statistics
+- `filename_intensity.tif` - Vignette-corrected intensity
+- `filename_average_lifetime.tif` - Average lifetime map
+- `filename_amplitude_*.tif` - Individual amplitude components
+- `filename_FLIM_lifetime_cim.png` - CIM lifetime visualization
+- `filename_amplitude_maps.png` - CIM amplitude subplots
 
-```python
-# Generate FLIM data stack from raw TTTR data
-flim_data_stack, intensity_image = ptu_file.get_flim_data_stack()
+### 🔬 **CellsegPTU_FLIM.py** - Cell Segmentation + FLIM Analysis
 
-# Data dimensions:
-# flim_data_stack: (pixX, pixY, spectral_detection_channel, tcspc_bins)
-# intensity_image: (pixX, pixY)
+**Purpose**: Advanced cell segmentation using deep learning followed by cellular FLIM analysis.
 
-print(f"FLIM data shape: {flim_data_stack.shape}")
-print(f"Intensity image shape: {intensity_image.shape}")
+**Key Features**:
+- Deep learning-based cell segmentation (U-Net)
+- Parameter optimization for segmentation quality
+- Cell-by-cell lifetime analysis
+- Multi-exponential fitting per cell
+- Distributed lifetime fitting options
 
-# Extract data from specific channel
-channel_1_data = flim_data_stack[:, :, 0, :]  # Channel 1 TCSPC histograms
-
-# Plot intensity image
-plt.figure(figsize=(8, 6))
-plt.imshow(intensity_image, cmap='viridis')
-plt.colorbar(label='Photon Counts')
-plt.title('FLIM Intensity Image')
-plt.xlabel('X Pixel')
-plt.ylabel('Y Pixel')
-plt.show()
+**Requirements**:
+```bash
+# Core dependencies + PlantSeg for segmentation
+conda install -c conda-forge numpy matplotlib scipy numba scikit-learn pandas tqdm
+conda install -c conda-forge pytorch torchvision torchaudio
+pip install plantseg
 ```
 
-### 3. Advanced PTU Scanning and Processing
-
+**Usage**:
 ```python
-from PTU_ScanRead import PTU_ScanRead, Process_Frame
-from FLIM_fitter import Calc_mIRF, FluoFit, DistFluoFit
-
-# Advanced PTU file processing with frame-by-frame analysis
-filename = 'your_multi_frame_data.ptu'
-head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame = PTU_ScanRead(filename)
-
-# Process specific frame
-frame_id = 0
-frame_indices = np.where(np.array(im_frame) == frame_id)[0]
-
-# Extract frame data
-frame_sync = np.array(im_sync)[frame_indices]
-frame_col = np.array(im_col)[frame_indices]
-frame_line = np.array(im_line)[frame_indices]
-frame_chan = np.array(im_chan)[frame_indices]
-frame_tcspc = np.array(im_tcspc)[frame_indices]
-
-# Process frame to get tag, tau, and TCSPC pixel data
-tag, tau, tcspc_pix = Process_Frame(frame_sync, frame_col, frame_line,
-                                   frame_chan, frame_tcspc, head,
-                                   cnum=1, resolution=0.2)
-
-print(f"Processed frame shape - Tag: {tag.shape}, Tau: {tau.shape}")
-```
-
-### 4. Cell Segmentation Pipeline
-
-```python
-from sklearn.model_selection import ParameterGrid
-from plantseg.predictions.functional.predictions import unet_predictions
-from plantseg.segmentation.functional.segmentation import mutex_ws
-import pickle
-import os
-
-# Configuration for cell segmentation
-filename = 'cell_data.ptu'
-res_file = filename[:-4] + '_FLIM_data.pkl'
-max_cell_Area = 5000  # Maximum cell area threshold
-
-# Load or process FLIM data
-if os.path.exists(res_file):
-    with open(res_file, 'rb') as f:
-        FLIM_data = pickle.load(f)
-    im_sync = FLIM_data['im_sync']
-    im_tcspc = FLIM_data['im_tcspc']
-    im_chan = FLIM_data['im_chan']
-    im_line = FLIM_data['im_line']
-    im_col = FLIM_data['im_col']
-    im_frame = FLIM_data['im_frame']
-    head = FLIM_data['head']
-else:
-    head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame = PTU_ScanRead(filename)
-
-# Channel configuration
-mem_PIE = 2    # Membrane stain PIE window
+# Edit the configuration section in CellsegPTU_FLIM.py:
+filename = r'path/to/your/file.ptu'
+mem_PIE = 2    # Membrane channel PIE window
 mem_det = 2    # Membrane detector
-auto_PIE = 1   # Autofluorescence PIE window
+auto_PIE = 1   # Autofluorescence PIE window  
 auto_det = 1   # Autofluorescence detector
 
-# Process frame for segmentation
-nz = 0  # Frame number
-frame_indices = np.where(np.array(im_frame) == nz)[0]
-tag, tau, tcspc_pix = Process_Frame(im_sync[frame_indices], im_col[frame_indices],
-                                   im_line[frame_indices], im_chan[frame_indices],
-                                   im_tcspc[frame_indices], head, cnum=1, resolution=0.2)
-
-# Create membrane image for segmentation
-pos = np.argmax(np.sum(tcspc_pix[:, :, :, mem_det*mem_PIE-1], axis=(0, 1)))
-nCh = pos + int(np.ceil(5/0.2))  # 5ns gate width
-img_mem = np.sum(tcspc_pix[:, :, pos:pos + nCh-1, mem_det*mem_PIE-1], axis=2)
-
-# Normalize for neural network
-img_np_scaled = (img_mem - np.min(img_mem)).astype(float)
-img_np_scaled /= np.max(img_np_scaled)
-
-# Apply U-Net segmentation
-pred = unet_predictions(img_np_scaled[np.newaxis, :, :],
-                       "confocal_2D_unet_ovules_ds2x",
-                       'pioneering-rhino',
-                       patch=[1, 512, 512])
-
-# Parameter optimization for segmentation
-param_grid = {
-    "beta": [round(x, 1) for x in np.arange(0.5, 0.95, 0.05)],
-    "post_minsize": [round(x, 1) for x in np.arange(190, 210, 10)],
-}
-params = list(ParameterGrid(param_grid))
-
-# Test different parameters
-results = []
-for param in params:
-    mask = mutex_ws(pred, superpixels=None, beta=param["beta"],
-                   post_minsize=param["post_minsize"], n_threads=6)
-    results.append({
-        "beta": param["beta"],
-        "post_minsize": param["post_minsize"],
-        "mask": mask,
-        "pred": pred[0, :, :]
-    })
-
-# Select best segmentation (most cells detected)
-cell_counts = [len(np.unique(r['mask'])) for r in results]
-best_idx = np.argmax(cell_counts)
-best_mask = results[best_idx]['mask'][0]
-
-print(f"Best segmentation: {cell_counts[best_idx]} cells detected")
-print(f"Optimal parameters: β={results[best_idx]['beta']}, min_size={results[best_idx]['post_minsize']}")
+# Run the script
+python CellsegPTU_FLIM.py
 ```
 
-### 5. Fluorescence Lifetime Fitting
-
+**Configuration Parameters**:
 ```python
-from FLIM_fitter import FluoFit, DistFluoFit, Calc_mIRF
+# Channel assignments
+mem_PIE = 2    # Laser pulse for membrane channel
+mem_det = 2    # Detector for membrane channel
+auto_PIE = 1   # Laser pulse for autofluorescence
+auto_det = 1   # Detector for autofluorescence
 
-# Calculate instrumental response function
-tcspc_data = tcspc_pix[:, :, :, auto_det*auto_PIE-1]  # Autofluorescence channel
-tcspcIRF = Calc_mIRF(head, tcspc_data[np.newaxis, :, :, np.newaxis])
-
-# Filter noise from IRF
-noise_threshold = 10**-4
-tmpi = np.where((tcspcIRF/np.max(tcspcIRF)) < noise_threshold)[1]
-tcspcIRF[:, tmpi, :] = 0
-
-# Fit fluorescence lifetimes for each cell
-ncells = len(np.unique(best_mask)) - 1  # Excluding background
-tauCell = np.zeros((ncells, 3))  # Assuming 3 exponential components
-ACell = np.zeros_like(tauCell)
-
-resolution = 0.2  # ns
-pulse_period = np.floor(head['MeasDesc_GlobalResolution']*1e9 + 0.5)
-
-for cell_id in range(ncells):
-    # Extract cell-specific TCSPC data
-    cell_mask = (best_mask == cell_id + 1)
-    cell_tcspc = np.sum(tcspc_data[cell_mask, :], axis=0)
-    
-    if np.sum(cell_tcspc) > 100:  # Minimum photon count threshold
-        # Initial lifetime guesses
-        tau0 = np.array([0.5, 2.0, 5.0])  # ns
-        
-        # Perform multi-exponential fitting
-        taufit, A, _, _, _, _, _, _, _ = FluoFit(
-            np.squeeze(tcspcIRF),
-            cell_tcspc,
-            pulse_period,
-            resolution,
-            tau0
-        )
-        
-        # Store results
-        tauCell[cell_id, :] = taufit
-        ACell[cell_id, :] = A/np.sum(A)  # Normalized amplitudes
-        
-        print(f"Cell {cell_id+1}: τ = {taufit} ns, A = {ACell[cell_id, :]}")
-
-# Alternative: Distributed lifetime fitting
-for cell_id in range(min(5, ncells)):  # First 5 cells as example
-    cell_mask = (best_mask == cell_id + 1)
-    cell_tcspc = np.sum(tcspc_data[cell_mask, :], axis=0)
-    
-    if np.sum(cell_tcspc) > 100:
-        cx, tau_dist, offset, shift, fit_curve, t_axis, error = DistFluoFit(
-            cell_tcspc,
-            pulse_period,
-            resolution,
-            np.squeeze(tcspcIRF),
-            shift=(-10, 10),
-            N=100,
-            bild=1  # Show plots
-        )
-        
-        print(f"Cell {cell_id+1} distributed fitting:")
-        print(f"  Dominant lifetimes: {tau_dist[cx > 0.1*np.max(cx)]} ns")
-        print(f"  Color shift: {shift} channels")
-        print(f"  Fit error: {error}")
+# Analysis parameters
+resolution = 0.2        # Temporal resolution (ns)
+max_cell_Area = 5000   # Maximum cell area filter
+cnum = 1               # PIE cycles (auto-detected)
 ```
 
-### 6. Pattern Matching Analysis
+**Output Variables**:
+- `tauCell` - Cell-wise lifetime values [ncells x 3]
+- `ACell` - Cell-wise amplitude coefficients [ncells x 3]
+- `LIm` - Pixel-wise lifetime images [height x width x 3]
+- `AIm` - Pixel-wise amplitude images [height x width x 3]
+- `mask` - Final segmentation mask
 
-```python
-from FLIM_fitter import PatternMatchIm, PatternMatch
+## 📊 Supported Hardware
 
-# Example: Pattern matching for basis function decomposition
-# This is useful for analyzing FLIM data with known basis functions
-
-# Generate example FLIM data and basis functions
-nx, ny, n_time = 64, 64, 256
-n_basis = 3
-
-# Create synthetic basis functions (e.g., different lifetime components)
-time_axis = np.linspace(0, 10, n_time)
-M = np.zeros((n_time, n_basis))
-M[:, 0] = np.exp(-time_axis / 1.0)    # Fast component (1 ns)
-M[:, 1] = np.exp(-time_axis / 3.0)    # Medium component (3 ns)
-M[:, 2] = np.exp(-time_axis / 8.0)    # Slow component (8 ns)
-
-# Normalize basis functions
-M = M / np.sum(M, axis=0)
-
-# Generate synthetic FLIM image data as linear combination of basis functions
-np.random.seed(42)
-true_coeffs = np.random.rand(nx, ny, n_basis)
-y_image = np.zeros((nx, ny, n_time))
-
-for i in range(nx):
-    for j in range(ny):
-        y_image[i, j, :] = M @ true_coeffs[i, j, :] + 0.1 * np.random.randn(n_time)
-
-# Perform pattern matching analysis
-print("=== Pattern Matching Analysis ===")
-
-# Method 1: Default least squares
-C_default, Z_default = PatternMatchIm(y_image, M, mode='Default')
-
-# Method 2: Non-negative least squares
-C_nonneg, Z_nonneg = PatternMatchIm(y_image, M, mode='Nonneg')
-
-# Method 3: PIRLS (Poisson Iterative Reweighted Least Squares)
-C_pirls, Z_pirls = PatternMatchIm(y_image, M, mode='PIRLS')
-
-print(f"Original coefficients shape: {true_coeffs.shape}")
-print(f"Recovered coefficients shape: {C_default.shape}")
-print(f"Reconstruction error (Default): {np.mean((y_image - Z_default)**2):.6f}")
-print(f"Reconstruction error (Non-neg): {np.mean((y_image - Z_nonneg)**2):.6f}")
-print(f"Reconstruction error (PIRLS): {np.mean((y_image - Z_pirls)**2):.6f}")
-
-# Single pixel pattern matching example
-pixel_data = y_image[32, 32, :]  # Center pixel
-c_pixel, z_pixel = PatternMatch(pixel_data, M, mode='Nonneg')
-
-print(f"\nSingle pixel analysis:")
-print(f"True coefficients: {true_coeffs[32, 32, :]}")
-print(f"Recovered coefficients: {c_pixel}")
-```
-
-### 7. Advanced Amplitude Visualization (FlavMetaFLIM.py)
-
-The FlavMetaFLIM module now includes advanced amplitude visualization capabilities with cim-style displays:
-
-```python
-from FlavMetaFLIM import display_amplitude_maps_subplot, subplot_cim
-
-# Example usage after FLIM analysis in FlavMetaFLIM.py
-# The script automatically displays amplitude maps with the following features:
-
-# 1. Subplot layout with all 4 amplitude components in one figure
-# 2. cim-style visualization with brightness overlay
-# 3. Individual scale bars for each component
-# 4. Proper titles and spacing
-
-# Key functions added:
-# - subplot_cim(): Creates cim-style displays within matplotlib subplots
-# - display_amplitude_maps_subplot(): Shows all amplitude maps in 2x2 layout
-
-# Features:
-# - Background/Offset amplitude (component 0)
-# - Individual lifetime component amplitudes (τ1, τ2, τ3)
-# - Vignette-corrected intensity overlay for brightness modulation
-# - Custom viridis colormap with proper scaling
-# - Individual colorbars with appropriate tick labels
-# - Professional layout with adjustable title positioning
-
-# The visualization automatically:
-# 1. Normalizes amplitudes across lifetime components
-# 2. Applies vignette correction to intensity overlay
-# 3. Creates RGB images with color-brightness coupling
-# 4. Adds scale bars to each subplot
-# 5. Formats titles with lifetime values
-
-print("✅ Advanced amplitude visualization with cim-style display completed")
-```
-
-### 8. Data Visualization and Analysis
-
-```python
-# Create comprehensive FLIM visualization
-fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-
-# Original intensity image
-axes[0, 0].imshow(img_mem, cmap='gray')
-axes[0, 0].set_title('Membrane Intensity')
-axes[0, 0].axis('off')
-
-# U-Net prediction
-axes[0, 1].imshow(pred[0, :, :], cmap='viridis')
-axes[0, 1].set_title('U-Net Prediction')
-axes[0, 1].axis('off')
-
-# Final segmentation
-axes[0, 2].imshow(best_mask, cmap='tab20')
-axes[0, 2].set_title(f'Cell Segmentation ({ncells} cells)')
-axes[0, 2].axis('off')
-
-# Lifetime maps (create pixel-wise lifetime images)
-LIm = np.zeros((*img_mem.shape, 3))  # 3 lifetime components
-AIm = np.zeros_like(LIm)             # 3 amplitude components
-
-for c in range(ncells):
-    cell_pixels = (best_mask == c + 1)
-    LIm[cell_pixels, :] = tauCell[c, :]
-    AIm[cell_pixels, :] = ACell[c, :]
-
-# Plot lifetime components
-for i in range(3):
-    axes[1, i].imshow(LIm[:, :, i], cmap='hot', vmin=0, vmax=5)
-    axes[1, i].set_title(f'τ{i+1} Lifetime Map')
-    axes[1, i].axis('off')
-
-plt.tight_layout()
-plt.savefig('FLIM_analysis_results.png', dpi=300, bbox_inches='tight')
-plt.show()
-
-# Summary statistics
-print("\n=== FLIM Analysis Summary ===")
-print(f"Total cells analyzed: {ncells}")
-print(f"Average lifetimes per component:")
-for i in range(3):
-    valid_lifetimes = tauCell[:, i][tauCell[:, i] > 0]
-    if len(valid_lifetimes) > 0:
-        print(f"  τ{i+1}: {np.mean(valid_lifetimes):.2f} ± {np.std(valid_lifetimes):.2f} ns")
-```
-
-## 🗂️ Module Overview
-
-### Core Modules
-- **[`readPTU_FLIM.py`](readPTU_FLIM.py)**: Basic PTU file reading and FLIM data stack generation
-- **[`PTU_ScanRead.py`](PTU_ScanRead.py)**: Advanced PTU scanning with frame-by-frame processing
-- **[`FLIM_fitter.py`](FLIM_fitter.py)**: Comprehensive fluorescence lifetime fitting algorithms
-
-### Analysis Pipelines
-- **[`CellsegPTU_FLIM.py`](CellsegPTU_FLIM.py)**: Complete cell segmentation and FLIM analysis pipeline
-- **[`FlavMetaFLIM.py`](FlavMetaFLIM.py)**: Specialized FLIM analysis for metabolic imaging with advanced amplitude visualization
-
-### Supported Hardware
-The library supports PTU files from various PicoQuant TCSPC devices:
+### TCSPC Devices
 - **MultiHarp 150N/150P** (T2/T3 modes)
 - **HydraHarp 400** (T2/T3 modes)
 - **TimeHarp 260N/260P** (T2/T3 modes)
@@ -616,34 +248,44 @@ The library supports PTU files from various PicoQuant TCSPC devices:
 
 ## 🔄 Recent Updates
 
+- **2025**: Added cim-style amplitude visualization with subplot display and scale bars
+- **2025**: Automated batch processing with results saved next to raw data
+- **2025**: Multiple output formats (.pkl, .csv, .tif, .png)
 - **2024**: Added comprehensive cell segmentation using PlantSeg U-Net models
 - **2024**: Implemented distributed fluorescence lifetime fitting
 - **2024**: Added PIE (Pulsed Interleaved Excitation) support
 - **2024**: Multi-frame and multi-channel analysis capabilities
 - **2024**: Parameter optimization for segmentation quality
 - **2024**: Advanced FLIM fitting with maximum likelihood estimation
-- **27 Aug, 2019**: Piezo Scanner data readability added to the library
 
 ## 💡 Tips for Best Results
 
+### For FlavMetaFLIM.py:
+1. **Batch Processing**: Organize PTU files in separate folders for different conditions
+2. **Parameter Tuning**: Adjust `tau0` initial guesses based on your sample
+3. **Window Analysis**: Use `flag_win=True` for noisy data, `False` for high SNR
+4. **File Organization**: Results automatically saved next to PTU files for easy access
+
+### For CellsegPTU_FLIM.py:
 1. **Memory Management**: For large PTU files, consider processing frame-by-frame
 2. **Parameter Optimization**: Use parameter grid search for optimal segmentation
 3. **Quality Control**: Filter cells by minimum photon count thresholds
 4. **Visualization**: Always inspect segmentation results before analysis
-5. **Performance**: Use `numba` compiled functions for speed-critical operations
-6. **GPU Acceleration**: Install CuPy for significant speedup on CUDA-compatible GPUs
-7. **CUDA Setup**: Ensure NVIDIA drivers and CUDA toolkit are properly installed for GPU support
+5. **Channel Configuration**: Ensure correct PIE window and detector assignments
 
 ## 🐛 Troubleshooting
 
 ### Common Issues
-- **PlantSeg Import Error**: Ensure PyTorch is properly installed
-- **CuPy Installation Issues**: Update setuptools and pip before installing cupy-core
-- **CUDA Compatibility**: Check GPU compatibility and CUDA version with `nvidia-smi`
-- **Memory Issues**: Reduce image size or process in chunks
-- **Fitting Convergence**: Adjust initial parameter guesses
-- **Segmentation Quality**: Optimize beta and post_minsize parameters
-- **GPU Memory**: Monitor GPU memory usage with large datasets
+- **PlantSeg Import Error**: Ensure PyTorch is properly installed before PlantSeg
+- **Memory Issues**: Reduce image size or use windowed analysis for large datasets
+- **Fitting Convergence**: Adjust initial parameter guesses (`tau0`)
+- **Segmentation Quality**: Optimize beta and post_minsize parameters in CellsegPTU_FLIM.py
+- **File Paths**: Use raw strings (r'path') or forward slashes for Windows paths
+
+### Error Messages
+- **"No photons found for channel X"**: Check channel assignments (auto_det, mem_det)
+- **"Analysis failed"**: Verify PTU file integrity and parameter settings
+- **PlantSeg model download**: Ensure internet connection for first-time model download
 
 ## 🤝 Contributing
 

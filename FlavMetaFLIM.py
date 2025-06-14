@@ -11,7 +11,10 @@ FlavMetaFLIM.py - FLIM Analysis Pipeline for FAD metabolic imaging
 import numpy as np
 import os
 import pickle
-import glob
+import pandas as pd
+from pathlib import Path
+from typing import Dict, List, Any
+from tifffile import imwrite
 
 # Third-party imports
 import matplotlib.pyplot as plt
@@ -23,69 +26,7 @@ from FLIM_fitter import Calc_mIRF, FluoFit, PatternMatchIm
 
 #%%
 # ============================================================================
-# CONFIGURATION AND DATA LOADING SECTION
-# ============================================================================
-
-# File path configuration
-# filename = r'D:\Collabs\fromYuexuan\Yuexuan_ptu_testfile.ptu'  # Input PTU file path
-filename = r'D:\Collabs\fromKaitlyn\Kaitlyn\data\OTB5\RawImage1.ptu'
-res_file = filename[:-4] + '_FLIM_data.pkl'  # Cached processed data file
-flag_allframes = True # flag for combining all frames together. In this case the data is processed as one single frame
-
-# Analysis parameters
-cnum = 1  # Number of PIE (Pulsed Interleaved Excitation) cycles, default value
-
-# Data loading: Check if preprocessed data exists to avoid reprocessing
-if os.path.exists(res_file):
-    """
-    Load previously processed FLIM data from pickle file.
-    This saves significant processing time for repeated analysis.
-    """
-    print(f"Loading cached FLIM data from: {res_file}")
-    pklname = glob.glob(res_file)
-    with open(pklname[0], 'rb') as f:
-        FLIM_data = pickle.load(f)
-    
-    # Extract photon stream data arrays
-    im_sync = FLIM_data['im_sync']      # Sync pulse timestamps
-    im_tcspc = FLIM_data['im_tcspc']    # Time-correlated single photon counting data
-    im_chan = FLIM_data['im_chan']      # Detector channel information
-    im_line = FLIM_data['im_line']      # Line scan coordinates
-    im_frame = FLIM_data['im_frame']    # Frame numbers
-    im_col = FLIM_data['im_col']        # Column coordinates
-    head = FLIM_data['head']            # Header information from PTU file
-    # timeF = FLIM_data['time']         # Optional: timing information
-    
-    # Update global namespace with all loaded data
-    globals().update(FLIM_data)
-else:
-    """
-    Read and process raw PTU file data.
-    This step extracts photon stream data from the binary PTU format.
-    """
-    print(f"Processing raw PTU file: {filename}")
-    head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame = PTU_ScanRead(filename)
-     
-# ============================================================================
-# PARAMETER SETUP AND INITIALIZATION
-# ============================================================================
-
-# TCSPC (Time-Correlated Single Photon Counting) parameters
-resolution = 0.2  # ns - temporal resolution for TCSPC histogram binning
-dind = np.unique(im_chan)  # Array of unique detector channel indices
-nFrames = head['ImgHdr_MaxFrames']  # Total number of frames in the dataset
-
-
-
-# PIE (Pulsed Interleaved Excitation) configuration
-if 'PIENumPIEWindows' in head:
-    cnum = head['PIENumPIEWindows']  # Number of PIE cycles from header
-    print(f"PIE cycles detected: {cnum}")
-#%% extra definitions
-
- 
-# ============================================================================
-# VIGNETTE CORRECTION FUNCTION
+# UTILITY FUNCTIONS
 # ============================================================================
 
 def vignette_correction(int_im, blur_factor=6, lower_percentile=2, upper_percentile=98):
@@ -128,7 +69,7 @@ def vignette_correction(int_im, blur_factor=6, lower_percentile=2, upper_percent
         Gaussian-blurred background estimate
     """
     
-    print(f"Applying vignette correction...")
+    print("Applying vignette correction...")
     print(f"  - Image shape: {int_im.shape}")
     print(f"  - Blur factor: 1/{blur_factor} of min image dimension")
     
@@ -306,7 +247,7 @@ def subplot_cim(x, brightness=None, color_range=None, colormap=None, ax=None):
     
     return handle
 
-def display_amplitude_maps_subplot(Amp, int2, taufit, flag_win=True, colormap=None):
+def display_amplitude_maps_subplot(Amp, int2, taufit, flag_win=True, colormap=None, save_path=None):
     """
     Display all amplitude maps in a single figure with subplots using cim-style visualization.
     
@@ -322,6 +263,8 @@ def display_amplitude_maps_subplot(Amp, int2, taufit, flag_win=True, colormap=No
         Flag indicating windowed vs pixel-wise analysis
     colormap : ndarray, optional
         Custom colormap (64×3 RGB values)
+    save_path : str, optional
+        Path to save the figure
     """
     
     print(f"Creating amplitude subplot display for {len(taufit)} lifetime components...")
@@ -355,56 +298,162 @@ def display_amplitude_maps_subplot(Amp, int2, taufit, flag_win=True, colormap=No
     plt.tight_layout()
     plt.suptitle(f'FLIM Amplitude Maps - {"Windowed" if flag_win else "Pixel-wise"} Analysis',
                  fontsize=14, y=1.02)
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Amplitude maps saved to: {save_path}")
+    
     plt.show()
     
-    print(f"✓ All {len(taufit)+1} amplitude components displayed in single subplot figure")
+    print(f" All {len(taufit)+1} amplitude components displayed in single subplot figure")
 
 #%%
+# ============================================================================
+# CORE FLIM ANALYSIS FUNCTIONS
+# ============================================================================
 
-auto_det = 0;  # Detector ID for autofluorescence channel detection
-auto_PIE = 1;  # Laser pulse number for autofluorescence channel (PIE window)
-flag_win = True; # Flag for window based lifetime estimation
+def load_or_process_ptu_data(filename: str, force_reprocess: bool = False) -> Dict[str, Any]:
+    """
+    Load PTU data from cache or process raw PTU file.
+    
+    Parameters
+    ----------
+    filename : str
+        Path to PTU file
+    force_reprocess : bool, optional
+        Force reprocessing even if cache exists
+        
+    Returns
+    -------
+    dict
+        Dictionary containing FLIM data arrays and header
+    """
+    
+    res_file = filename[:-4] + '_FLIM_data.pkl'
+    
+    if os.path.exists(res_file) and not force_reprocess:
+        print(f"Loading cached FLIM data from: {res_file}")
+        with open(res_file, 'rb') as f:
+            FLIM_data = pickle.load(f)
+        
+        # Extract data
+        data = {
+            'im_sync': FLIM_data['im_sync'],
+            'im_tcspc': FLIM_data['im_tcspc'],
+            'im_chan': FLIM_data['im_chan'],
+            'im_line': FLIM_data['im_line'],
+            'im_frame': FLIM_data['im_frame'],
+            'im_col': FLIM_data['im_col'],
+            'head': FLIM_data['head']
+        }
+    else:
+        print(f"Processing raw PTU file: {filename}")
+        head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame = PTU_ScanRead(filename)
+        
+        data = {
+            'im_sync': im_sync,
+            'im_tcspc': im_tcspc,
+            'im_chan': im_chan,
+            'im_line': im_line,
+            'im_frame': im_frame,
+            'im_col': im_col,
+            'head': head
+        }
+    
+    return data
 
-
-if flag_allframes is True:
+def analyze_flim_data(data: Dict[str, Any], 
+                     auto_det: int = 0, 
+                     auto_PIE: int = 1, 
+                     flag_win: bool = True,
+                     resolution: float = 0.2,
+                     tau0: np.ndarray = np.array([0.3, 1.7, 6.0]),
+                     win_size: int = 8,
+                     step: int = 2) -> Dict[str, Any]:
+    """
+    Perform FLIM analysis on PTU data.
+    
+    Parameters
+    ----------
+    data : dict
+        PTU data dictionary from load_or_process_ptu_data
+    auto_det : int, optional
+        Detector ID for autofluorescence channel detection
+    auto_PIE : int, optional
+        Laser pulse number for autofluorescence channel (PIE window)
+    flag_win : bool, optional
+        Flag for window based lifetime estimation
+    resolution : float, optional
+        Temporal resolution for TCSPC histogram binning (ns)
+    tau0 : ndarray, optional
+        Initial lifetime guesses
+    win_size : int, optional
+        Size of the sliding window (pixels)
+    step : int, optional
+        Step size for window movement
+        
+    Returns
+    -------
+    dict
+        Dictionary containing analysis results
+    """
+    
+    # Extract data
+    im_sync = np.array(data['im_sync'])
+    im_tcspc = np.array(data['im_tcspc'])
+    im_chan = np.array(data['im_chan'])
+    im_line = np.array(data['im_line'])
+    im_col = np.array(data['im_col'])
+    head = data['head']
+    
+    # PIE configuration
+    cnum = 1
+    if 'PIENumPIEWindows' in head:
+        cnum = head['PIENumPIEWindows']
+        print(f"PIE cycles detected: {cnum}")
+    
+    # Process frame
+    print("Processing FLIM data...")
     tag, tau, tcspc_pix = Process_Frame(
         im_sync, im_col, im_line, im_chan,
         im_tcspc, head, cnum=cnum, resolution=resolution
     )
     
-    nx,ny,ch,p = np.shape(tag)
+    nx, ny, ch, p = np.shape(tag)
     
-    Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)  # resolution of 0.256 ns to calculate average lifetimes
+    # Calculate parameters
+    Resolution = max(head['MeasDesc_Resolution'] * 1e9, resolution)
     chDiv = np.ceil(1e-9 * Resolution / head['MeasDesc_Resolution'])
-    SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
-    Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * (head['MeasDesc_Resolution'] / Resolution / cnum) * 1e9)
-    tmpCh = np.ceil(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution']) # total number of channels in the original tcspc histogram
+    #SyncRate = 1.0 / head['MeasDesc_GlobalResolution']
+    Ngate = round(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'] * 
+                  (head['MeasDesc_Resolution'] / Resolution / cnum) * 1e9)
+    tmpCh = np.ceil(head['MeasDesc_GlobalResolution'] / head['MeasDesc_Resolution'])
     
+    # Extract channel data
     idx = im_chan == auto_det
-    if len(idx) > 0:  # Check if there are photons to process
-        tcspc_im = mHist((im_tcspc[idx] / chDiv).astype(np.int64) - int((auto_PIE-1)*tmpCh/cnum/chDiv),
-                         np.arange(Ngate))[0]  # tcspc histograms for all the pixels at once!
+    if np.sum(idx) > 0:
+        tcspc_im = mHist((im_tcspc[idx] / chDiv).astype(np.int64) - 
+                        int((auto_PIE-1)*tmpCh/cnum/chDiv),
+                        np.arange(Ngate))[0]
     else:
         print(f"Warning: No photons found for channel {auto_det} - skipping FLIM analysis")
-
-    tcspcIRF = Calc_mIRF(head, tcspc_im[np.newaxis,:,np.newaxis]);
-    tmpi = np.where((tcspcIRF/np.max(tcspcIRF))<(10**-4))[1]
-    tcspcIRF[:,tmpi,:]=0
+        return {}
     
-    tau0 = np.array([0.3, 1.7, 6.0]) # initial guesses        
-    taufit, A, _, zfit, patterns, _, _, _, _ = FluoFit(np.squeeze(tcspcIRF), tcspc_im, \
-                                                        np.floor(head['MeasDesc_GlobalResolution']*10**9/cnum + 0.5), \
-                                                        resolution, tau0, flag_ml=True)    
-    patterns = patterns/np.sum(patterns,axis=0)    # normalized patterns
-    if flag_win is False: # pixel by pixel
-        #Amp = np.zeros((nx,ny,len(taufit)+1))
-        Amp,Z = PatternMatchIm(tcspc_pix[:,:,:,0], patterns, mode='PIRLS')
-        int_im = np.sum(tcspc_pix[:,:,:,0],axis=2)
-        
-    if flag_win is True:  # sliding window approach
-        win_size = 8  # Size of the sliding window (8x8 pixels)
-        step = 2     # Step size for window movement
-        
+    # Calculate IRF and perform fitting
+    print("Calculating IRF and performing lifetime fitting...")
+    tcspcIRF = Calc_mIRF(head, tcspc_im[np.newaxis, :, np.newaxis])
+    tmpi = np.where((tcspcIRF/np.max(tcspcIRF)) < (10**-4))[1]
+    tcspcIRF[:, tmpi, :] = 0
+    
+    taufit, A, _, zfit, patterns, _, _, _, _ = FluoFit(
+        np.squeeze(tcspcIRF), tcspc_im,
+        np.floor(head['MeasDesc_GlobalResolution']*10**9/cnum + 0.5),
+        resolution, tau0, flag_ml=True
+    )
+    patterns = patterns / np.sum(patterns, axis=0)  # normalized patterns
+    
+    # Pattern matching analysis
+    if flag_win:
         print(f"Processing with sliding window: {win_size}x{win_size}, step={step}")
         
         # Calculate output dimensions
@@ -413,79 +462,318 @@ if flag_allframes is True:
         
         print(f"Original image: {nx}x{ny}, Windows: {n_win_x}x{n_win_y}")
         
-        # Initialize output arrays for windowed analysis
-        Amp_win = np.zeros((n_win_x, n_win_y, len(taufit) + 1))
-        Z_win = np.zeros((n_win_x, n_win_y, tcspc_pix.shape[2]))
-        
-        # Create tcspc_win by sliding window aggregation
+        # Initialize arrays
         tcspc_win = np.zeros((n_win_x, n_win_y, tcspc_pix.shape[2]))
         int_im = np.zeros((n_win_x, n_win_y))
+        
         print("Aggregating TCSPC data with sliding windows...")
         for i in range(n_win_x):
             for j in range(n_win_y):
-                # Define window boundaries
                 x_start = i * step
                 x_end = x_start + win_size
                 y_start = j * step
                 y_end = y_start + win_size
                 
-                # Aggregate TCSPC data within the window (sum all pixels)
                 tcspc_win[i, j, :] = np.sum(tcspc_pix[x_start:x_end, y_start:y_end, :, 0], axis=(0, 1))
-                int_im[i,j] = np.sum(tcspc_win[i, j, :])
+                int_im[i, j] = np.sum(tcspc_win[i, j, :])
         
         print("Running pattern matching on windowed data...")
-        # Apply pattern matching to the aggregated windowed data
-        Amp_win, Z_win = PatternMatchIm(tcspc_win, patterns, mode='PIRLS')
+        Amp, Z = PatternMatchIm(tcspc_win, patterns, mode='PIRLS')
+        print(f"Windowed analysis completed: {n_win_x}x{n_win_y} windows processed")
         
-        # Store windowed results
-        Amp = Amp_win
-        Z = Z_win
-        print(f"✓ Windowed analysis completed: {n_win_x}x{n_win_y} windows processed")
-
-    # ============================================================================
-    # AMPLITUDE VISUALIZATION
-    # ============================================================================
+    else:
+        # Pixel by pixel analysis
+        print("Running pixel-by-pixel pattern matching...")
+        Amp, Z = PatternMatchIm(tcspc_pix[:, :, :, 0], patterns, mode='PIRLS')
+        int_im = np.sum(tcspc_pix[:, :, :, 0], axis=2)
     
-    # normalize the Amps
-    Amp = Amp/np.sum(Amp[:,:,1:],axis=2,keepdims=True)
-    # Apply vignette correction to intensity image
-    print("\nApplying vignette correction to intensity image...")
+    # Normalize amplitudes
+    Amp = Amp / np.sum(Amp[:, :, 1:], axis=2, keepdims=True)
+    
+    # Apply vignette correction
+    print("Applying vignette correction...")
     int2, bblur = vignette_correction(int_im)
-   
-    # Create custom colormap (similar to MATLAB's viridis)
-    import matplotlib.cm as cm
-    custom_cmap = cm.viridis(np.linspace(0, 1, 64))[:, :3]  # 64x3 RGB array
     
-    # Display all amplitude maps in a single subplot figure
-    display_amplitude_maps_subplot(Amp, int2, taufit, flag_win, custom_cmap)
-    
-    # Print amplitude statistics
-    print(f"\nAmplitude Statistics:")
-    print(f"Background: min={np.min(Amp[:,:,0]):.3f}, max={np.max(Amp[:,:,0]):.3f}, mean={np.mean(Amp[:,:,0]):.3f}")
-    for i, tau in enumerate(taufit):
-        amp_comp = Amp[:, :, i + 1]
-        print(f"Component {i+1} (τ={tau:.2f}ns): min={np.min(amp_comp):.3f}, max={np.max(amp_comp):.3f}, mean={np.mean(amp_comp):.3f}")
-
-   
-    # Create average lifetime image (amplitude-weighted)
+    # Create average lifetime image
     tau_avg = np.zeros_like(int_im)
     for i, tau_val in enumerate(taufit):
         tau_avg += Amp[:, :, i + 1] * tau_val
     
-    # Avoid division by zero
     intensity_safe = np.where(int2 > 0, int2, 1)
     tau_avg = np.where(int2 > 0, tau_avg / intensity_safe, 0)
-       
-    # Display FLIM image using cim function
+    
+    # Print statistics
+    print("\nAmplitude Statistics:")
+    print(f"Background: min={np.min(Amp[:,:,0]):.3f}, max={np.max(Amp[:,:,0]):.3f}, mean={np.mean(Amp[:,:,0]):.3f}")
+    for i, tau in enumerate(taufit):
+        amp_comp = Amp[:, :, i + 1]
+        print(f"Component {i+1} (τ={tau:.2f}ns): min={np.min(amp_comp):.3f}, max={np.max(amp_comp):.3f}, mean={np.mean(amp_comp):.3f}")
+    
+    return {
+        'tcspcIRF': tcspcIRF,
+        'taufit': taufit,
+        'patterns': patterns,
+        'Amp': Amp,
+        'int2': int2,
+        'int_im': int_im,
+        'tau_avg': tau_avg,
+        'flag_win': flag_win,
+        'head': head
+    }
+
+def save_flim_results(results: Dict[str, Any], output_dir: str, filename_base: str):
+    """
+    Save FLIM analysis results in multiple formats.
+    
+    Parameters
+    ----------
+    results : dict
+        Results dictionary from analyze_flim_data
+    output_dir : str
+        Output directory path
+    filename_base : str
+        Base filename for output files
+    """
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    print(f"\nSaving results to: {output_dir}")
+    
+    # Save as pickle
+    pkl_file = output_path / f"{filename_base}_FLIM_results.pkl"
+    with open(pkl_file, 'wb') as f:
+        pickle.dump(results, f)
+    print(f" Pickle file saved: {pkl_file}")
+    
+    # Save lifetime values as CSV
+    csv_file = output_path / f"{filename_base}_lifetimes.csv"
+    lifetime_data = {
+        'Component': [f'τ{i+1}' for i in range(len(results['taufit']))],
+        'Lifetime_ns': results['taufit']
+    }
+    df_lifetimes = pd.DataFrame(lifetime_data)
+    df_lifetimes.to_csv(csv_file, index=False)
+    print(f" Lifetime CSV saved: {csv_file}")
+    
+    # Save amplitude statistics as CSV
+    stats_file = output_path / f"{filename_base}_amplitude_stats.csv"
+    Amp = results['Amp']
+    stats_data = []
+    
+    # Background statistics
+    stats_data.append({
+        'Component': 'Background',
+        'Min': np.min(Amp[:, :, 0]),
+        'Max': np.max(Amp[:, :, 0]),
+        'Mean': np.mean(Amp[:, :, 0]),
+        'Std': np.std(Amp[:, :, 0])
+    })
+    
+    # Lifetime component statistics
+    for i, tau in enumerate(results['taufit']):
+        amp_comp = Amp[:, :, i + 1]
+        stats_data.append({
+            'Component': f'τ{i+1}_{tau:.2f}ns',
+            'Min': np.min(amp_comp),
+            'Max': np.max(amp_comp),
+            'Mean': np.mean(amp_comp),
+            'Std': np.std(amp_comp)
+        })
+    
+    df_stats = pd.DataFrame(stats_data)
+    df_stats.to_csv(stats_file, index=False)
+    print(f" Amplitude statistics CSV saved: {stats_file}")
+    
+    # Save images as TIFF
+    # Intensity image
+    int_tiff = output_path / f"{filename_base}_intensity.tif"
+    imwrite(int_tiff, results['int2'].astype(np.float32))
+    print(f"Intensity TIFF saved: {int_tiff}")
+    
+    # Average lifetime image
+    tau_tiff = output_path / f"{filename_base}_average_lifetime.tif"
+    imwrite(tau_tiff, results['tau_avg'].astype(np.float32))
+    print(f"Average lifetime TIFF saved: {tau_tiff}")
+    
+    # Individual amplitude component TIFFs
+    for i in range(results['Amp'].shape[2]):
+        if i == 0:
+            comp_name = "background"
+        else:
+            comp_name = f"component_{i}_tau_{results['taufit'][i-1]:.2f}ns"
+        
+        amp_tiff = output_path / f"{filename_base}_amplitude_{comp_name}.tif"
+        imwrite(amp_tiff, results['Amp'][:, :, i].astype(np.float32))
+        print(f"Amplitude TIFF saved: {amp_tiff}")
+    
+    # Display and save CIM lifetime image
     print("\nDisplaying FLIM image using cim function with vignette-corrected intensity...")
     
     # Create custom colormap (similar to MATLAB's jet)
-    import matplotlib.cm as cm
-    custom_cmap = cm.jet(np.linspace(0, 1, 64))[:, :3]  # 64x3 RGB array
-
-    # Display lifetime image with vignette-corrected intensity overlay
-   
+    custom_jet_cmap = plt.cm.jet(np.linspace(0, 1, 64))[:, :3]
+    
     plt.figure(figsize=(10, 8))
-    cim(tau_avg, int2**0.75, [1.5, 4], 'v', custom_cmap)
+    cim(results['tau_avg'], results['int2']**0.75, [1.5, 4], 'v', custom_jet_cmap)
     plt.suptitle('FLIM Image: Lifetime with Vignette-Corrected Intensity Overlay', fontsize=14)
+    
+    # Save FLIM image
+    flim_file = output_path / f"{filename_base}_FLIM_lifetime_cim.png"
+    plt.savefig(flim_file, dpi=300, bbox_inches='tight')
+    print(f"FLIM lifetime image saved: {flim_file}")
     plt.show()
+    
+    # Save amplitude visualization with cim-style subplots
+   
+    viz_file = output_path / f"{filename_base}_amplitude_maps.png"
+    display_amplitude_maps_subplot(
+        results['Amp'], results['int2'], results['taufit'],
+        results['flag_win'], custom_jet_cmap, save_path=viz_file
+    )
+
+def process_single_file(ptu_file: str, **analysis_params) -> Dict[str, Any]:
+    """
+    Process a single PTU file with FLIM analysis.
+    Results are saved in the same directory as the PTU file.
+    
+    Parameters
+    ----------
+    ptu_file : str
+        Path to PTU file
+    **analysis_params
+        Additional parameters for analyze_flim_data
+        
+    Returns
+    -------
+    dict
+        Analysis results
+    """
+    
+    print(f"\n{'='*60}")
+    print(f"Processing: {ptu_file}")
+    print(f"{'='*60}")
+    
+    try:
+        # Load/process data
+        data = load_or_process_ptu_data(ptu_file)
+        
+        # Analyze
+        results = analyze_flim_data(data, **analysis_params)
+        
+        if not results:
+            print(f" Analysis failed for {ptu_file}")
+            return {}
+        
+        # Save results in the same directory as the PTU file
+        ptu_path = Path(ptu_file)
+        output_dir = ptu_path.parent  # Same directory as PTU file
+        filename_base = ptu_path.stem
+        save_flim_results(results, str(output_dir), filename_base)
+        
+        print(f" Successfully processed: {ptu_file}")
+        return results
+        
+    except Exception as e:
+        print(f" Error processing {ptu_file}: {str(e)}")
+        return {}
+
+def process_multiple_folders(folder_paths: List[str], **analysis_params) -> Dict[str, Dict[str, Any]]:
+    """
+    Process multiple folders containing PTU files.
+    Results are saved in the same directories as the PTU files.
+    
+    Parameters
+    ----------
+    folder_paths : list of str
+        List of folder paths containing PTU files
+    **analysis_params
+        Additional parameters for analyze_flim_data
+        
+    Returns
+    -------
+    dict
+        Dictionary with folder names as keys and analysis results as values
+    """
+    
+    all_results = {}
+    
+    for folder_path in folder_paths:
+        folder_path = Path(folder_path)
+        folder_name = folder_path.name
+        
+        print(f"\n{'='*80}")
+        print(f"Processing folder: {folder_path}")
+        print(f"{'='*80}")
+        
+        # Find all PTU files in folder
+        ptu_files = list(folder_path.glob("*.ptu"))
+        
+        if not ptu_files:
+            print(f" No PTU files found in {folder_path}")
+            continue
+        
+        print(f"Found {len(ptu_files)} PTU files")
+        
+        folder_results = {}
+        
+        for ptu_file in ptu_files:
+            # Process file and save results next to the PTU file
+            file_results = process_single_file(str(ptu_file), **analysis_params)
+            if file_results:
+                folder_results[ptu_file.stem] = file_results
+        
+        all_results[folder_name] = folder_results
+        
+        print(f"\n Completed folder: {folder_name} ({len(folder_results)}/{len(ptu_files)} files processed)")
+    
+    return all_results
+
+#%%
+# ============================================================================
+# EXAMPLE USAGE AND MAIN EXECUTION
+# ============================================================================
+
+if __name__ == "__main__":
+    # Example usage for single file
+    single_file = False
+    
+    if single_file:
+        # Single file processing - results saved next to PTU file
+        ptu_file = r'D:\Collabs\fromKaitlyn\Kaitlyn\data\OTB5\RawImage1.ptu'
+        
+        results = process_single_file(
+            ptu_file,
+            auto_det=0,
+            auto_PIE=1,
+            flag_win=True,
+            resolution=0.2,
+            tau0=np.array([0.3, 1.7, 6.0]),
+            win_size=8,
+            step=2
+        )
+    
+    # Example usage for multiple folders
+    else:
+        # Multiple folder processing - results saved next to PTU files
+        folder_paths = [
+            r'D:\Collabs\fromKaitlyn\Kaitlyn\data\OTB5',
+            # Add more folder paths as needed
+        ]
+        
+        all_results = process_multiple_folders(
+            folder_paths,
+            auto_det=0,
+            auto_PIE=1,
+            flag_win=True,
+            resolution=0.2,
+            tau0=np.array([0.3, 1.7, 6.0]),
+            win_size=8,
+            step=2
+        )
+        
+        print(f"\n{'='*80}")
+        print("BATCH PROCESSING COMPLETE")
+        print(f"{'='*80}")
+        print(f"Total folders processed: {len(all_results)}")
+        for folder_name, folder_results in all_results.items():
+            print(f"  {folder_name}: {len(folder_results)} files")
