@@ -123,7 +123,7 @@ try:
     mod = SourceModule(kernel_code)
     kernel = mod.get_function("PIRLS_nonneg_kernel")
     CUDA_AVAILABLE = True
-    print("✅ Fixed CUDA kernel compiled successfully")
+    print(" CUDA kernel compiled successfully")
 except Exception as e:
     print(f"CUDA compilation failed: {e}")
     CUDA_AVAILABLE = False

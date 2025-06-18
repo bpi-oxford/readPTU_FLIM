@@ -346,6 +346,7 @@ def load_or_process_ptu_data(filename: str, force_reprocess: bool = False) -> Di
             'im_col': FLIM_data['im_col'],
             'head': FLIM_data['head']
         }
+        del FLIM_data
     else:
         print(f"Processing raw PTU file: {filename}")
         head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame = PTU_ScanRead(filename)
@@ -359,7 +360,7 @@ def load_or_process_ptu_data(filename: str, force_reprocess: bool = False) -> Di
             'im_col': im_col,
             'head': head
         }
-    
+        del head, im_sync, im_tcspc, im_chan, im_line, im_col, im_frame
     return data
 
 def analyze_flim_data(data: Dict[str, Any], 
@@ -369,7 +370,8 @@ def analyze_flim_data(data: Dict[str, Any],
                      resolution: float = 0.2,
                      tau0: np.ndarray = np.array([0.3, 1.7, 6.0]),
                      win_size: int = 8,
-                     step: int = 2) -> Dict[str, Any]:
+                     step: int = 2,
+                     IRF_data = None) -> Dict[str, Any]:
     """
     Perform FLIM analysis on PTU data.
     
@@ -407,6 +409,7 @@ def analyze_flim_data(data: Dict[str, Any],
     im_col = np.array(data['im_col'], dtype=np.uint16)
     head = data['head']
     
+    del data
     # PIE configuration
     cnum = 1
     if 'PIENumPIEWindows' in head:
@@ -441,15 +444,21 @@ def analyze_flim_data(data: Dict[str, Any],
         return {}
     
     # Calculate IRF and perform fitting
-    print("Calculating IRF and performing lifetime fitting...")
-    tcspcIRF = Calc_mIRF(head, tcspc_im[np.newaxis, :, np.newaxis])
-    tmpi = np.where((tcspcIRF/np.max(tcspcIRF)) < (10**-4))[1]
-    tcspcIRF[:, tmpi, :] = 0
-    
+    if type(IRF_data) is dict:
+        # Loading IRF provided as input
+        tcspcIRF = np.array(IRF_data['tcspcIRF'], dtype=np.float64)
+        # TODO: Check resolution of IRF file before accepting it
+    else:
+        print("Calculating IRF and performing lifetime fitting...")
+        tcspcIRF = Calc_mIRF(head, tcspc_im[np.newaxis, :, np.newaxis])
+        tmpi = np.where((tcspcIRF/np.max(tcspcIRF)) < (10**-4))[1]
+        tcspcIRF[:, tmpi, :] = 0
+        
+    tmp_tau = tau0.copy()
     taufit, A, _, zfit, patterns, _, _, _, _ = FluoFit(
         np.squeeze(tcspcIRF), tcspc_im,
         np.floor(head['MeasDesc_GlobalResolution']*10**9/cnum + 0.5),
-        resolution, tau0, flag_ml=True
+        resolution, tmp_tau, flag_ml=False
     )
     
     # Sort lifetime values and reorder corresponding patterns and amplitudes
@@ -506,14 +515,31 @@ def analyze_flim_data(data: Dict[str, Any],
     int2, bblur = vignette_correction(int_im)
     
     # Create average lifetime image
-    tau_avg = np.zeros_like(int_im)
+    tau_avg_int = np.zeros_like(int_im)
     for i, tau_val in enumerate(taufit):
-        tau_avg += Amp[:, :, i + 1] * tau_val
+        tau_avg_int += Amp[:, :, i + 1] * tau_val
     
-    intensity_safe = np.where(int2 > 0, int2, 1)
-    tau_avg = np.where(int2 > 0, tau_avg / intensity_safe, 0)
+    #print(np.sum(Amp[:, :, 1:],axis=2))
+    #intensity_safe = np.where(int2 > 0, int2, 1)
+    tau_avg_int = np.where(int2 > 0, tau_avg_int / np.sum(Amp[:, :, 1:],axis=2), 0) # this is intensity averaged
+    
+    
+    # 2. Rate-averaged lifetime
+    rate_const = 1.0/taufit
+    tau_avg_rate = np.zeros_like(int_im)
+    for i, rate in enumerate(rate_const):
+        tau_avg_rate += Amp[:, :, i + 1] * rate
+    
+    # Handle division by zero and invalid values in rate averaging
+    tau_avg_rate = np.where(tau_avg_rate > 0, np.sum(Amp[:, :, 1:],axis=2)/tau_avg_rate, 0)
     
     # Print statistics
+    print("\nLifetime Statistics:")
+    valid_int = tau_avg_int > 0
+    valid_rate = tau_avg_rate > 0
+    print(f"Intensity-averaged lifetime: min={np.min(tau_avg_int[valid_int]):.2f}ns, max={np.max(tau_avg_int[valid_int]):.2f}ns, mean={np.mean(tau_avg_int[valid_int]):.2f}ns")
+    print(f"Rate-averaged lifetime: min={np.min(tau_avg_rate[valid_rate]):.2f}ns, max={np.max(tau_avg_rate[valid_rate]):.2f}ns, mean={np.mean(tau_avg_rate[valid_rate]):.2f}ns")
+    
     print("\nAmplitude Statistics:")
     print(f"Background: min={np.min(Amp[:,:,0]):.3f}, max={np.max(Amp[:,:,0]):.3f}, mean={np.mean(Amp[:,:,0]):.3f}")
     for i, tau in enumerate(taufit):
@@ -527,7 +553,8 @@ def analyze_flim_data(data: Dict[str, Any],
         'Amp': Amp,
         'int2': int2,
         'int_im': int_im,
-        'tau_avg': tau_avg,
+        'tau_avg_int': tau_avg_int,
+        'tau_avg_rate': tau_avg_rate,
         'flag_win': flag_win,
         'head': head
     }
@@ -602,10 +629,14 @@ def save_flim_results(results: Dict[str, Any], output_dir: str, filename_base: s
     imwrite(int_tiff, results['int2'].astype(np.float32))
     print(f"Intensity TIFF saved: {int_tiff}")
     
-    # Average lifetime image
-    tau_tiff = output_path / f"{filename_base}_average_lifetime.tif"
-    imwrite(tau_tiff, results['tau_avg'].astype(np.float32))
-    print(f"Average lifetime TIFF saved: {tau_tiff}")
+    # Average lifetime images
+    tau_int_tiff = output_path / f"{filename_base}_intensity_averaged_lifetime.tif"
+    imwrite(tau_int_tiff, results['tau_avg_int'].astype(np.float32))
+    print(f"Intensity-averaged lifetime TIFF saved: {tau_int_tiff}")
+    
+    tau_rate_tiff = output_path / f"{filename_base}_rate_averaged_lifetime.tif"
+    imwrite(tau_rate_tiff, results['tau_avg_rate'].astype(np.float32))
+    print(f"Rate-averaged lifetime TIFF saved: {tau_rate_tiff}")
     
     # Individual amplitude component TIFFs
     for i in range(results['Amp'].shape[2]):
@@ -618,29 +649,40 @@ def save_flim_results(results: Dict[str, Any], output_dir: str, filename_base: s
         imwrite(amp_tiff, results['Amp'][:, :, i].astype(np.float32))
         print(f"Amplitude TIFF saved: {amp_tiff}")
     
-    # Display and save CIM lifetime image
-    print("\nDisplaying FLIM image using cim function with vignette-corrected intensity...")
+    # Display and save CIM lifetime images
+    print("\nDisplaying FLIM images using subplot_cim function with vignette-corrected intensity...")
     
     # Create custom colormap (similar to MATLAB's jet)
     custom_jet_cmap = plt.cm.jet(np.linspace(0, 1, 64))[:, :3]
     
-    plt.figure(figsize=(10, 8))
-    cim(results['tau_avg'], results['int2']**0.75, [1.5, 4], 'v', custom_jet_cmap)
-    plt.suptitle('FLIM Image: Lifetime with Vignette-Corrected Intensity Overlay', fontsize=14)
+    # Create figure with subplots for both lifetime images
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+    
+    # Intensity-averaged lifetime
+    subplot_cim(results['tau_avg_int'], results['int2']**0.75, [1.5, 4], custom_jet_cmap, ax=ax1)
+    ax1.set_title('Intensity-Averaged Lifetime', fontsize=12)
+    
+    # Rate-averaged lifetime
+    subplot_cim(results['tau_avg_rate'], results['int2']**0.75, [1.5, 4], custom_jet_cmap, ax=ax2)
+    ax2.set_title('Rate-Averaged Lifetime', fontsize=12)
+    
+    plt.suptitle('FLIM Images: Lifetime with Vignette-Corrected Intensity Overlay', fontsize=14)
+    plt.tight_layout()
     
     # Save FLIM image
-    flim_file = output_path / f"{filename_base}_FLIM_lifetime_cim.png"
+    flim_file = output_path / f"{filename_base}_FLIM_lifetime_comparison.png"
     plt.savefig(flim_file, dpi=300, bbox_inches='tight')
-    print(f"FLIM lifetime image saved: {flim_file}")
+    print(f"FLIM lifetime comparison image saved: {flim_file}")
     plt.show()
     
-    # Save amplitude visualization with cim-style subplots
-   
-    viz_file = output_path / f"{filename_base}_amplitude_maps.png"
+    # Display and save amplitude visualization with cim-style subplots
+    print("\nDisplaying amplitude maps...")
     display_amplitude_maps_subplot(
         results['Amp'], results['int2'], results['taufit'],
-        results['flag_win'], custom_jet_cmap, save_path=viz_file
+        results['flag_win'], custom_jet_cmap, save_path=None
     )
+    
+    # The amplitude visualization is already displayed above with the lifetime images
 
 def process_single_file(ptu_file: str, **analysis_params) -> Dict[str, Any]:
     """
@@ -744,6 +786,10 @@ def process_multiple_folders(folder_paths: List[str], **analysis_params) -> Dict
 # EXAMPLE USAGE AND MAIN EXECUTION
 # ============================================================================
 
+IRF_file = r'D:\Collabs\fromKaitlyn\Kaitlyn\data\IRFmodel.pkl'
+with open(IRF_file, 'rb') as f:
+     IRF_data = pickle.load(f)
+     
 if __name__ == "__main__":
     # Example usage for single file
     single_file = False
@@ -760,7 +806,8 @@ if __name__ == "__main__":
             resolution=0.2,
             tau0=np.array([0.3, 1.7, 6.0]),
             win_size=8,
-            step=2
+            step=2, 
+            IRF_data = IRF_data
         )
     
     # Example usage for multiple folders
@@ -779,7 +826,8 @@ if __name__ == "__main__":
             resolution=0.2,
             tau0=np.array([0.3, 1.7, 6.0]),
             win_size=8,
-            step=2
+            step=2,
+            IRF_data = IRF_data
         )
         
         print(f"\n{'='*80}")

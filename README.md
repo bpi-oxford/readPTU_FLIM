@@ -131,9 +131,33 @@ For significantly faster FLIM analysis using GPU acceleration, you can install C
 #### Installation Steps
 
 1. **Install CUDA Toolkit 11.6**
+   
+   **Option 1: Using Conda (Recommended for Anaconda users)**
    ```bash
-   # Download from NVIDIA Developer site
+   # Activate your environment
+   conda activate ptu_flim
+   
+   # Install CUDA toolkit 11.6 via conda
+   conda install -c nvidia cuda-toolkit=11.6
+   
+   # Alternative: Install from conda-forge
+   conda install -c conda-forge cudatoolkit=11.6
+   ```
+   
+   **Option 2: Install NVIDIA drivers and CUDA separately**
+   ```bash
+   # Install NVIDIA drivers (if not already installed)
+   conda install -c conda-forge nvidia-ml-py3
+   
+   # Install CUDA toolkit
+   conda install -c nvidia cuda=11.6
+   ```
+   
+   **Option 3: For systems without conda CUDA support**
+   ```bash
+   # Download and install from NVIDIA Developer site
    # https://developer.nvidia.com/cuda-11-6-0-download-archive
+   # Follow platform-specific installation instructions
    ```
 
 2. **Install PyCUDA**
