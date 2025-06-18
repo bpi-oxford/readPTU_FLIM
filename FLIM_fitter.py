@@ -34,6 +34,18 @@ from sklearn.linear_model import LinearRegression
 from tqdm import tqdm
 # from lmfit import minimize, Parameters #,report_fit, fit_report, report_errors,
 
+# Try to import CUDA PIRLS functionality
+try:
+    from PIRLS_cu.pirls_pycuda import pirls_batch_cuda, CUDA_AVAILABLE
+    if CUDA_AVAILABLE:
+        print("✅ CUDA PIRLS module imported successfully - GPU acceleration available")
+    else:
+        print("⚠️  CUDA available but kernel compilation failed - using CPU-only implementation")
+except ImportError:
+    CUDA_AVAILABLE = False
+    pirls_batch_cuda = None
+    print("⚠️  CUDA PIRLS module not available - using CPU-only implementation")
+
 #%%
 
 
@@ -589,39 +601,6 @@ def Calc_mIRF(head, tcspc):
     return IRF
 
 
-
-
-
-
-# def PIRLSnonneg_batch_vectorized(M, Y, max_num_iter=10):
-#     n_samples, n_features = M.shape
-#     n_pixels = Y.shape[1]
-#     TINY = 0.1 / n_samples
-    
-#     # Initial NNLS for all pixels using sklearn
-#     lr = LinearRegression(positive=True, fit_intercept=False)
-#     lr.fit(M, Y)
-#     Beta = lr.coef_.T  # (n_features, n_pixels)
-    
-#     for iteration in range(max_num_iter):
-#         # Compute predictions for all pixels at once
-#         mu = M @ Beta  # (n_samples, n_pixels)
-        
-#         # Compute weights for all pixels simultaneously
-#         W = 1.0 / np.maximum(mu, TINY)  # (n_samples, n_pixels)
-        
-#         # Solve weighted normal equations for each pixel
-#         # This is the bottleneck that's hard to fully vectorize due to NNLS constraint
-#         for k in range(n_pixels):
-#             Aw = M.T @ np.diag(W[:, k]) @ M  # Weighted Gram matrix
-#             bw = M.T @ (W[:, k] * Y[:, k])   # Weighted RHS
-#             beta_new, _ = nnls(Aw, bw)
-#             Beta[:, k] = beta_new
-   
-#     return Beta
-
-
-
 def PIRLSnonneg_batch(M, Y, max_num_iter=10):
     """
     Batch PIRLS solver across multiple right-hand sides (pixels) without using Parallel.
@@ -664,6 +643,51 @@ def PIRLSnonneg_batch(M, Y, max_num_iter=10):
             beta = beta_new
         Beta[:, i] = beta
     return Beta
+
+
+def PIRLSnonneg_batch_gpu(M, Y, max_num_iter=10):
+    """
+    GPU-accelerated batch PIRLS solver with fallback to CPU implementation.
+    
+    This function automatically tries to use GPU acceleration when available,
+    falling back to CPU implementation if GPU is not available or fails.
+
+    Parameters
+    ----------
+    M : ndarray, shape (n_samples, n_features)
+        Design matrix.
+    Y : ndarray, shape (n_samples, n_pixels)
+        Observation matrix, one column per pixel.
+    max_num_iter : int, optional
+        Number of PIRLS iterations.
+
+    Returns
+    -------
+    Beta : ndarray, shape (n_features, n_pixels)
+        Fitted non-negative coefficients per pixel.
+    """
+    
+    # Try GPU implementation first
+    if CUDA_AVAILABLE and pirls_batch_cuda is not None:
+        try:
+            n_samples, n_basis = M.shape
+            n_pixels = Y.shape[1]
+            
+            # Check if problem size fits GPU constraints
+            if n_basis <= 64 and n_samples <= 2048:
+                print(f" Using GPU acceleration for PIRLS fitting ({n_pixels} pixels)")
+                Beta = pirls_batch_cuda(M, Y, max_num_iter)
+                return Beta
+            else:
+                print(f"  Problem size too large for GPU (n_basis={n_basis}, n_samples={n_samples})")
+                print("   Falling back to CPU implementation...")
+        except Exception as e:
+            print(f"  GPU PIRLS failed: {e}")
+            print("   Falling back to CPU implementation...")
+    
+    # Fallback to CPU implementation
+    print(f" Using CPU implementation for PIRLS fitting ({Y.shape[1]} pixels)")
+    return PIRLSnonneg_batch(M, Y, max_num_iter)
 
 
 def PIRLSnonneg(x, y, max_num_iter=10):
@@ -1499,69 +1523,10 @@ def PatternMatchIm(y,M,mode = 'Default'):
          C_flat = lr.coef_.T          # make (n_basis, npix)
          
      elif mode == 'PIRLS':
-     
-         # call GPU batch PIRLS
+         # Use GPU-accelerated PIRLS with automatic fallback to CPU
+         C_flat = PIRLSnonneg_batch_gpu(M, Y)
          
-         
-               
-         
-         # No built‐in vectorized PIRLSnonneg, so we’ll need to loop over
-         # pixels (or parallelize).  
-             
-         # C_flat = np.zeros((n_basis, nx*ny))
-         # for k in range(nx*ny):
-         #     c, _ = PIRLSnonnegFast(M, Y[:,k])
-         #     C_flat[:,k] = c
-         
-         # nx, ny, t = y.shape
-         # threads = 128
-         # assert M.shape[0] == t
-        
-         # npix = nx * ny
-         # # flatten
-         # Y = y.reshape(npix, t).astype(np.float32)
-         # X = M.astype(np.float32)
-         # # transfer to GPU
-         # Xg = cuda.to_device(X)
-         # Yg = cuda.to_device(Y)
-         # # allocate output
-         # Cg = cuda.device_array((M.shape[1], npix), dtype=np.float32)
-         # blocks = (npix + threads - 1) // threads
-         # # launch kernel
-         # pirls_kernel[blocks, threads](Xg, Yg, Cg)
-         # # fast host transfer
-         # host_C = cuda.pinned_array((M.shape[1], npix), dtype=np.float32)
-         # stream = cuda.stream()
-         # Cg.copy_to_host(host_C, stream=stream)
-         # stream.synchronize()
-         # C_flat = host_C
-         #     # reconstruct
-         # Z_flat = X.dot(C_flat)
-         # C = C_flat.T.reshape(nx, ny, -1)
-         # Z = Z_flat.T.reshape(nx, ny, t)
-
-         # # free GPU memory
-         # try:
-         #    # delete device arrays
-         #    del X_d, Y_d, C_d
-         #    # reset Numba CUDA context (frees all allocations)
-         #    cuda.current_context().reset()
-         # except Exception:
-         #    pass
-         # try:
-         #    # clear CuPy memory pools
-         #    mp = cp.get_default_memory_pool(); mp.free_all_blocks()
-         #    pm = cp.get_default_pinned_memory_pool(); pm.free_all_blocks()
-         # except Exception:
-         #    pass
-        
-        
-        
-        
-        
-        
-         C_flat = PIRLSnonneg_batch(M, Y)
-        
+         #C_flat = PIRLSnonneg_batch(M, Y)
    
       
      else:

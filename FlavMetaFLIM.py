@@ -399,11 +399,12 @@ def analyze_flim_data(data: Dict[str, Any],
     """
     
     # Extract data
-    im_sync = np.array(data['im_sync'])
-    im_tcspc = np.array(data['im_tcspc'])
-    im_chan = np.array(data['im_chan'])
-    im_line = np.array(data['im_line'])
-    im_col = np.array(data['im_col'])
+    # CRITICAL FIX: Use appropriate integer data types to save memory and ensure correct data handling
+    im_sync = np.array(data['im_sync'], dtype=np.uint32)
+    im_tcspc = np.array(data['im_tcspc'], dtype=np.uint16)
+    im_chan = np.array(data['im_chan'], dtype=np.uint8)
+    im_line = np.array(data['im_line'], dtype=np.uint16)
+    im_col = np.array(data['im_col'], dtype=np.uint16)
     head = data['head']
     
     # PIE configuration
@@ -756,7 +757,7 @@ if __name__ == "__main__":
     else:
         # Multiple folder processing - results saved next to PTU files
         folder_paths = [
-            r'D:\Collabs\fromKaitlyn\Kaitlyn\data\OTB5',
+            r'D:\Collabs\fromKaitlyn\Kaitlyn\data\OTB13',
             # Add more folder paths as needed
         ]
         
