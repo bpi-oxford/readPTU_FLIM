@@ -451,7 +451,17 @@ def analyze_flim_data(data: Dict[str, Any],
         np.floor(head['MeasDesc_GlobalResolution']*10**9/cnum + 0.5),
         resolution, tau0, flag_ml=True
     )
+    
+    # Sort lifetime values and reorder corresponding patterns and amplitudes
+    sort_idx = np.argsort(taufit)
+    taufit = taufit[sort_idx]
+    A = A[sort_idx]
+    patterns = patterns[:, 1:]  # Remove background pattern (first column)
+    patterns = patterns[:, sort_idx]  # Reorder patterns
+    patterns = np.column_stack([np.ones(patterns.shape[0]), patterns])  # Add background back as first column
     patterns = patterns / np.sum(patterns, axis=0)  # normalized patterns
+    
+    print(f"Sorted lifetime values: {taufit}")
     
     # Pattern matching analysis
     if flag_win:
@@ -757,7 +767,7 @@ if __name__ == "__main__":
     else:
         # Multiple folder processing - results saved next to PTU files
         folder_paths = [
-            r'D:\Collabs\fromKaitlyn\Kaitlyn\data\OTB13',
+            r'D:\Collabs\fromKaitlyn\Kaitlyn\data\OTB5',
             # Add more folder paths as needed
         ]
         
